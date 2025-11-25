@@ -1,0 +1,7 @@
+.idea/
+config.py
+/.venv/
+/profiles/
+/templates/config.json
+__pycache__/
+*.pyc

@@ -1,0 +1,7 @@
+# pip install -r requirements.txt
+
+PySide6~=6.10.0
+qasync~=0.28.0
+SQLAlchemy~=2.0.44
+playwright~=1.55.0
+asyncpg~=0.30.0
