@@ -193,7 +193,7 @@ class MainWindow(QMainWindow):
         # ✅ Стили кнопок иконок
         self.style_icon_btn = """
         QPushButton { border: none; background-color: transparent; }
-        QPushButton:hover { background-color: rgba(255, 105, 180, 70); border-radius: 4px; }
+        QPushButton:hover { background-color: rgba(0, 120, 215, 40); border-radius: 4px; }
         """
         self.style_run_btn = """
         QPushButton {
@@ -202,7 +202,7 @@ class MainWindow(QMainWindow):
             background-color: transparent;
             padding: 2px 10px;
         }
-        QPushButton:hover { background-color: rgba(255, 105, 180, 70); }
+        QPushButton:hover { background-color: rgba(0, 120, 215, 40); }
         """
 
         # ✅ Запускаем загрузку из БД сразу после создания UI
@@ -455,7 +455,7 @@ class MainWindow(QMainWindow):
 
         self.table.setUpdatesEnabled(False)
 
-        bg = QColor(255, 105, 180, 40) if checked else QColor(0, 0, 0, 0)
+        bg = QColor(0, 120, 215, 40) if checked else QColor(0, 0, 0, 0)
 
         for row in range(self.table.rowCount()):
             cb = self._row_checkbox(row)
@@ -473,7 +473,7 @@ class MainWindow(QMainWindow):
 
             widget = self.table.cellWidget(row, 4)
             if widget:
-                widget.setStyleSheet("background-color: rgba(255, 105, 180, 40);" if checked else "")
+                widget.setStyleSheet("background-color: rgba(0, 120, 215, 40);" if checked else "")
 
         self.table.setUpdatesEnabled(True)
         self.header.setState(Qt.Checked if checked else Qt.Unchecked)
@@ -486,7 +486,7 @@ class MainWindow(QMainWindow):
             return
 
         is_checked = checkbox.isChecked()
-        bg = QColor(255, 105, 180, 40) if is_checked else QColor(0, 0, 0, 0)
+        bg = QColor(0, 120, 215, 40) if is_checked else QColor(0, 0, 0, 0)
 
         for col in range(self.table.columnCount()):
             if col == 2:  # статус не трогаем
@@ -497,7 +497,7 @@ class MainWindow(QMainWindow):
 
         widget = self.table.cellWidget(row, 4)
         if widget:
-            widget.setStyleSheet("background-color: rgba(255, 105, 180, 40);" if is_checked else "")
+            widget.setStyleSheet("background-color: rgba(0, 120, 215, 40);" if is_checked else "")
 
         # tri-state для header
         total = self.table.rowCount()
