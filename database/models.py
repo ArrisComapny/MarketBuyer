@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Integer, String, ForeignKey, DateTime, Boolean
+from sqlalchemy import Integer, String, ForeignKey, DateTime, Boolean, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database.db import Base
@@ -26,6 +26,8 @@ class Account(Base):
     name: Mapped[str] = mapped_column(String(20), nullable=False)
     male: Mapped[str] = mapped_column(String(20), nullable=False)
     user_agent: Mapped[str] = mapped_column(String(200), nullable=False)
+    comment: Mapped[str] = mapped_column(String(300), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default='disable', nullable=False)
 
     users_link: Mapped[list["UsersAccounts"]] = relationship(back_populates="account_ref", cascade="all, delete-orphan")
 
@@ -55,6 +57,13 @@ class PhoneMessage(Base):
 
 class Proxy(Base):
     __tablename__ = "proxies"
+    __table_args__ = (UniqueConstraint("host", "port", "login", "password", name="uq_proxy"),)
 
-    proxy: Mapped[str] = mapped_column(String(100), primary_key=True, nullable=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    host: Mapped[str] = mapped_column(String(50), nullable=False)
+    port: Mapped[str] = mapped_column(String(50), nullable=False)
+    login: Mapped[str] = mapped_column(String(20), nullable=False)
+    password: Mapped[str] = mapped_column(String(20), nullable=False)
+    proxy_scheme: Mapped[str] = mapped_column(String(20), nullable=False)
     change_ip_url: Mapped[str] = mapped_column(String(255), nullable=False)
+
