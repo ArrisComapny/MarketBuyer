@@ -1,18 +1,17 @@
-import sys
 import asyncio
+
 from qasync import QEventLoop
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QPalette, QColor
-from PySide6.QtCore import Qt
 
 from gui.login_window import LoginWindow
-from core.app import init_application, DBConnectionError
 from utils.messagebox import CustomMessageBox
-
+from core.app import init_application, DBConnectionError
 
 login_window: LoginWindow | None = None
 
-def apply_fixed_theme(app: QApplication):
+def apply_fixed_theme(app: QApplication) -> None:
     app.setStyle("Fusion")
 
     palette = QPalette()
@@ -61,7 +60,7 @@ if __name__ == "__main__":
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)
 
-    async def start():
+    async def start() -> None:
         global login_window
 
         login_window = LoginWindow()

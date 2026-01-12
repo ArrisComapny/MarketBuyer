@@ -1,16 +1,16 @@
-import base64
 import os
+import base64
 
-from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton, QHBoxLayout, QCheckBox, \
-    QApplication
 from qasync import asyncSlot
+from sqlalchemy import select
+from PySide6.QtGui import QIcon
+from utils.messagebox import CustomMessageBox
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton, QHBoxLayout, QCheckBox, QApplication
 
 import core.app as app_core
-from core.settings import save_settings, load_settings
+
 from database.models import User
-from sqlalchemy import select
-from utils.messagebox import CustomMessageBox
+from core.settings import save_settings, load_settings
 
 
 class LoginWindow(QWidget):
@@ -59,7 +59,6 @@ class LoginWindow(QWidget):
             }
         """)
 
-
         self.btn = QPushButton("Войти")
         self.btn.clicked.connect(self.try_login)
         self.btn.setStyleSheet("""
@@ -98,7 +97,6 @@ class LoginWindow(QWidget):
 
             self.remember_cb.setChecked(True)
 
-        # ставим фокус на логин
         self.login.setFocus()
         self.login.setCursorPosition(len(self.login.text()))
 
@@ -170,7 +168,6 @@ class LoginWindow(QWidget):
                 "remember": True,
             })
         else:
-            # если галочка снята — очищаем
             save_settings({
                 "login": "",
                 "password": "",
