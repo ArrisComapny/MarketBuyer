@@ -13,6 +13,10 @@ from database.models import Account
 from gui.setting_menu_bar import ProxyManagerDialog
 from gui.add_personal_account import AddAccountDialog
 
+from core.browser import BrowserController
+from database.models import Proxy
+from core.proxy_pool import ProxyPool
+
 
 class CheckBoxHeader(QHeaderView):
     clicked = Signal(Qt.CheckState)
@@ -83,7 +87,7 @@ class MainWindow(QMainWindow):
         self.search_input.setFixedHeight(35)
         self.search_input.setFixedWidth(200)
         self.search_input.setPlaceholderText("Поиск по телефону")
-        self.search_input.textChanged.connect(self.filter_table)
+        self.search_input.textChanged.connect(lambda _: self.apply_filters())
 
         icon_action = QAction(QIcon("templates/icons/find.png"), "", self)
         self.search_input.addAction(icon_action, QLineEdit.LeadingPosition)
@@ -119,6 +123,13 @@ class MainWindow(QMainWindow):
         self.filter_layout.setContentsMargins(6, 4, 6, 4)
         self.filter_layout.setSpacing(4)
 
+        self.run_btn_text = {
+            "disable": "Активировать",
+            "login": "Запуск",
+            "logout": "Вход",
+        }
+
+        self._filter_hide_slot = None
         row = QWidget(self.filter_panel)
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
@@ -127,13 +138,16 @@ class MainWindow(QMainWindow):
         label = QLabel("Фильтр по статусам:", row)
         row_layout.addWidget(label)
 
-        self.cb_enable = QCheckBox("Enable", row)
         self.cb_disable = QCheckBox("Disable", row)
-        self.cb_enable.setChecked(True)
+        self.cb_login = QCheckBox("login", row)
+        self.cb_logout = QCheckBox("logout", row)
+        self.cb_login.setChecked(True)
         self.cb_disable.setChecked(True)
+        self.cb_logout.setChecked(True)
 
-        row_layout.addWidget(self.cb_enable)
         row_layout.addWidget(self.cb_disable)
+        row_layout.addWidget(self.cb_login)
+        row_layout.addWidget(self.cb_logout)
         row_layout.addStretch()
 
         self.filter_layout.addWidget(row)
@@ -145,6 +159,10 @@ class MainWindow(QMainWindow):
         self.filter_anim.setEasingCurve(QEasingCurve.OutCubic)
 
         self.btn_filter.toggled.connect(self.toggle_filter_panel)
+
+        self.cb_disable.toggled.connect(self.apply_filters)
+        self.cb_login.toggled.connect(self.apply_filters)
+        self.cb_logout.toggled.connect(self.apply_filters)
 
         # ================== 2) Таблица ==================
         self.table = QTableWidget()
@@ -190,11 +208,35 @@ class MainWindow(QMainWindow):
             border-radius: 4px;
         }
         """
+        style_run_btn = """
+                QPushButton {
+                    border: 1px solid white; 
+                    background-color: transparent; 
+                }
+                QPushButton:hover {
+                    background-color: rgba(0, 120, 215, 40);
+                    border-radius: 4px;
+                }
+                """
+
+        self.style_run_btn_disabled = """
+        QPushButton {
+            border: 1px solid #888;
+            background-color: #d0d0d0;
+            color: #777;
+        }
+        """
 
         self.style_icon_btn = style_btn
-        self.style_run_btn = style_btn
+        self.style_run_btn = style_run_btn
 
         QTimer.singleShot(0, self.load_accounts)
+
+        self._closing = False
+        self._browser_tasks = {}  # phone10 -> asyncio.Task
+        self._browser_controllers = {}  # phone10 -> BrowserController
+        self.proxy_pool = ProxyPool()
+        self._account_proxy = {}  # phone10 -> proxy_id (чтобы освобождать)
 
     @staticmethod
     async def _get_accounts_for_table():
@@ -212,6 +254,7 @@ class MainWindow(QMainWindow):
         self._filling_table = True
         self.table.blockSignals(True)
         self.table.setRowCount(len(rows))
+        # self.apply_filters()
 
         for row, (phone, comment, status) in enumerate(rows):
             # ---------- ЧЕКБОКС ----------
@@ -238,13 +281,16 @@ class MainWindow(QMainWindow):
             self.table.setItem(row, 2, item_status)
 
             item_comment = QTableWidgetItem(comment or "")
-            item_status.setFlags(item_status.flags() & ~Qt.ItemIsEditable)
+            # item_status.setFlags(item_status.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(row, 3, item_comment)
 
             # ---------- КНОПКИ В ЯЧЕЙКЕ ----------
-            btn_run = QPushButton("Запуск")
+            btn_run = QPushButton()
             btn_run.setFixedSize(105, 25)
             btn_run.setStyleSheet(self.style_run_btn)
+
+            st = (status or "").strip().lower()
+            btn_run.setText(self.run_btn_text.get(st, "Запуск"))
 
             btn_settings = QPushButton()
             btn_settings.setIcon(QIcon("templates/icons/setting.png"))
@@ -272,16 +318,23 @@ class MainWindow(QMainWindow):
             item_status = self.table.item(row, 2)
             if item_status:
                 st = (status or "").strip().lower()
-                if st == "enable":
-                    item_status.setBackground(QColor(0, 200, 0, 35))
-                elif st == "disable":
-                    item_status.setBackground(QColor(255, 0, 0, 35))
+
+                status_colors = {
+                    "disable": QColor(255, 0, 0, 35),  # красный
+                    "login": QColor(0, 200, 0, 35),  # зелёный
+                    "logout": QColor(255, 200, 0, 35),  # жёлтый
+                }
+
+                color = status_colors.get(st)
+                if color:
+                    item_status.setBackground(color)
 
             # ---------- обработчики ----------
-            btn_run.clicked.connect(lambda _, r=row: self.on_run_clicked(r))
+            btn_run.clicked.connect(lambda _, r=row, b=btn_run: self.on_run_clicked_row(r, b))
             btn_settings.clicked.connect(lambda _, r=row: self.on_settings_clicked(r))
             btn_delete.clicked.connect(lambda _, r=row: self.on_delete_clicked(r))
 
+        self.apply_filters()
         self.table.blockSignals(False)
         self._filling_table = False
 
@@ -326,10 +379,9 @@ class MainWindow(QMainWindow):
     def toggle_filter_panel(self, opened: bool) -> None:
         self.filter_anim.stop()
 
-        try:
-            self.filter_anim.finished.disconnect()
-        except:
-            pass
+        if self._filter_hide_slot:
+            self.filter_anim.finished.disconnect(self._filter_hide_slot)
+            self._filter_hide_slot = None
 
         if opened:
             self.filter_panel.setVisible(True)
@@ -347,9 +399,10 @@ class MainWindow(QMainWindow):
             self.filter_anim.setStartValue(start)
             self.filter_anim.setEndValue(0)
 
-            def _hide() -> None:
+            def _hide():
                 self.filter_panel.setVisible(False)
 
+            self._filter_hide_slot = _hide
             self.filter_anim.finished.connect(_hide)
             self.filter_anim.start()
 
@@ -365,9 +418,153 @@ class MainWindow(QMainWindow):
         if result == QDialog.Accepted:
             print("Настройки сохранены")
 
-    def on_run_clicked(self, row) -> None:
-        id_ = self.table.item(row, 1).text()
-        print(f"[RUN] Запуск для ID {id_}, row = {row}")
+    def on_run_clicked_row(self, row: int, btn: QPushButton) -> None:
+        phone_item = self.table.item(row, 1)
+        status_item = self.table.item(row, 2)
+        if not phone_item or not status_item:
+            return
+
+        phone10 = phone_item.data(Qt.UserRole)
+        status = (status_item.text() or "").strip().lower()
+
+        # сохраним исходный текст (один раз)
+        btn.setProperty("old_text", btn.text())
+        self._set_actions_container_enabled(btn, False)  # 🔒 блокируем settings/delete
+
+        if status == "disable":
+            btn.setText("Активируется…")
+            btn.setDisabled(True)
+            btn.setStyleSheet(self.style_run_btn_disabled)
+            self.activate_account(phone10, btn)
+
+        elif status == "login":
+            btn.setText("Запускается…")
+            btn.setDisabled(True)
+            btn.setStyleSheet(self.style_run_btn_disabled)
+            self.start_process(phone10, btn)  # <-- передай btn, чтобы вернуть потом
+
+        elif status == "logout":
+            btn.setText("Входит…")
+            btn.setDisabled(True)
+            btn.setStyleSheet(self.style_run_btn_disabled)
+            self.login_account(phone10, btn)  # <-- передай btn, чтобы вернуть потом
+
+    def closeEvent(self, event):
+        # если уже в процессе закрытия — разрешаем закрыть
+        if self._closing:
+            event.accept()
+            return
+
+        # первый вызов — НЕ закрываем сразу
+        event.ignore()
+        self.setEnabled(False)  # чтобы не кликали по UI во время закрытия
+
+        asyncio.create_task(self._shutdown_and_close())
+
+    async def _shutdown_and_close(self):
+        # 1) отменяем все browser tasks
+        tasks = list(self._browser_tasks.values())
+        for t in tasks:
+            if t and not t.done():
+                t.cancel()
+
+        # 2) просим контроллеры закрыться
+        close_tasks = [ctrl.close() for ctrl in self._browser_controllers.values()]
+
+        # 3) ждём завершения всего
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*close_tasks, return_exceptions=True)
+
+        # 4) теперь можно закрывать окно/приложение
+        self._closing = True
+        self.setEnabled(True)
+        self.close()  # повторный вызов closeEvent теперь пропустит (accept)
+
+    async def _run_account_with_proxy(self, phone10: str, btn: QPushButton, mode: str) -> None:
+        print(f"{mode.upper()}", phone10)
+
+        # 1) UA из БД
+        account = await self._get_account_by_phone(phone10)
+        ua = (account.get("user_agent") if account else "") or ""
+
+        # 2) берём прокси и ждём уникальный IP
+        proxy, ip, msg = await self.proxy_pool.acquire_unique(cooldown_sec=120)
+        print(f"[proxy] {msg}")
+
+        if not proxy:
+            if not self._closing:
+                self._show_warning("Прокси", msg)  # <-- ВАЖНО: показываем msg из ProxyPool
+            self._restore_btn(btn)
+            self._set_actions_container_enabled(btn, True)
+            return
+
+        # ВАЖНО: используй тот словарь, который у тебя реально есть
+        # Если у тебя есть self._account_proxy_id — лучше его.
+        # Я оставляю self._account_proxy как в твоём коде:
+        self._account_proxy[phone10] = proxy.id
+
+        print(f"[{phone10}] mode={mode}, proxy_id={proxy.id}, ip={ip}")
+
+        # 3) запускаем браузер
+        controller = BrowserController(profile_name=phone10, user_agent=ua, proxy=proxy)
+
+        # Если в BrowserController есть логика "режимов" — можно передать:
+        # controller.mode = mode
+        # или controller.run(mode)
+        # но у тебя пока run() без аргументов, так что просто запускаем.
+
+        self._browser_controllers[phone10] = controller
+
+        task = asyncio.create_task(controller.run(mode=mode))
+        self._browser_tasks[phone10] = task
+
+        def _cleanup(t: asyncio.Task):
+            async def _async_cleanup():
+                try:
+                    t.result()
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
+
+                # 4) освободить прокси
+                proxy_id = self._account_proxy.pop(phone10, None)
+                if proxy_id is not None:
+                    await self.proxy_pool.release(proxy_id)
+
+                # 5) вернуть UI
+                if not self._closing:
+                    old_text = btn.property("old_text") or "Запуск"
+                    btn.setText(old_text)
+                    btn.setDisabled(False)
+                    btn.setStyleSheet(self.style_run_btn)
+                    self._set_actions_container_enabled(btn, True)
+
+                self._browser_tasks.pop(phone10, None)
+                self._browser_controllers.pop(phone10, None)
+
+            asyncio.create_task(_async_cleanup())
+
+        task.add_done_callback(_cleanup)
+    @asyncSlot()
+    async def activate_account(self, phone10: str, btn: QPushButton) -> None:
+        await self._run_account_with_proxy(phone10, btn, mode="activate")
+
+    @asyncSlot()
+    async def start_process(self, phone10: str, btn: QPushButton) -> None:
+        await self._run_account_with_proxy(phone10, btn, mode="start_process")
+
+    @asyncSlot()
+    async def login_account(self, phone10: str, btn: QPushButton) -> None:
+        await self._run_account_with_proxy(phone10, btn, mode="login")
+
+    def _restore_btn(self, btn: QPushButton) -> None:
+        old_text = btn.property("old_text") or "Запуск"
+        btn.setText(old_text)
+        btn.setDisabled(False)
+        btn.setStyleSheet(self.style_run_btn)
+
+        self._set_actions_container_enabled(btn, True)  #  вернуть settings/delete
 
     @asyncSlot()
     async def on_settings_clicked(self, row: int) -> None:
@@ -455,6 +652,9 @@ class MainWindow(QMainWindow):
         self.table.setUpdatesEnabled(True)
         self.header.setState(Qt.Checked if checked else Qt.Unchecked)
 
+    def _show_warning(self, title: str, text: str) -> None:
+        QTimer.singleShot(0, lambda: QMessageBox.warning(self, title, text))
+
     def on_row_checkbox_changed(self, checkbox: QCheckBox) -> None:
         container = checkbox.parentWidget()
         index = self.table.indexAt(container.pos())
@@ -512,28 +712,64 @@ class MainWindow(QMainWindow):
 
         asyncio.create_task(self._save_comment_async(phone10, new_comment))
 
-    def filter_table(self, text: str) -> None:
-        text = text.strip().lower()
-        clean_text = ''.join(filter(str.isdigit, text))  # только цифры
+    def _norm_status(self, s: str) -> str:
+        return (s or "").strip().lower()
+
+    def apply_filters(self) -> None:
+        # --- 1) статусы, которые разрешены ---
+        allowed = set()
+        if self.cb_disable.isChecked():
+            allowed.add("disable")
+        if self.cb_login.isChecked():
+            allowed.add("login")
+        if self.cb_logout.isChecked():
+            allowed.add("logout")
+
+        # если ничего не выбрано — показываем всё
+        status_show_all = (len(allowed) == 0)
+
+        # --- 2) текст поиска ---
+        text = self.search_input.text().strip().lower()
+        clean_text = ''.join(filter(str.isdigit, text))
 
         for row in range(self.table.rowCount()):
-            phone_item = self.table.item(row, 1)
-            comment_item = self.table.item(row, 3)
+            # статус из колонки 2
+            st_item = self.table.item(row, 2)
+            st = self._norm_status(st_item.text() if st_item else "")
+            status_ok = status_show_all or (st in allowed)
 
-            phone = phone_item.text().lower() if phone_item else ""
-            comment = comment_item.text().lower() if comment_item else ""
-
-            clean_phone = ''.join(filter(str.isdigit, phone))
-
+            # поиск по телефону и комменту
             if not text:
-                self.table.setRowHidden(row, False)
+                search_ok = True
+            else:
+                phone_item = self.table.item(row, 1)
+                comment_item = self.table.item(row, 3)
+
+                phone = phone_item.text().lower() if phone_item else ""
+                comment = comment_item.text().lower() if comment_item else ""
+
+                clean_phone = ''.join(filter(str.isdigit, phone))
+                match_phone = (text in phone) or (clean_text and clean_text in clean_phone)
+                match_comment = text in comment
+                search_ok = match_phone or match_comment
+
+            # итог: показываем только если оба условия true
+            self.table.setRowHidden(row, not (status_ok and search_ok))
+
+    def filter_table(self, text: str) -> None:
+        self.apply_filters()
+
+    def _set_actions_container_enabled(self, run_btn: QPushButton, enabled: bool) -> None:
+        container = run_btn.parentWidget()  # это QWidget из колонки "Действие"
+        if not container:
+            return
+
+        # найдём все кнопки в этой ячейке: run/settings/delete
+        for b in container.findChildren(QPushButton):
+            # run-кнопку не трогаем здесь (ты её управляешь отдельно)
+            if b is run_btn:
                 continue
-
-            match_phone = (text in phone or clean_text in clean_phone)
-
-            match_comment = text in comment
-            match = match_phone or match_comment
-            self.table.setRowHidden(row, not match)
+            b.setEnabled(enabled)
 
     @staticmethod
     def _format_phone_ru(phone10: str) -> str:

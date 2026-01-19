@@ -46,14 +46,14 @@ class UsersAccounts(Base):
     account_ref: Mapped["Account"] = relationship("Account", back_populates="users_link")
 
 
-class PhoneMessage(Base):
-    __tablename__ = "phone_messages"
+class PhoneCode(Base):
+    __tablename__ = "phone_code"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     phone: Mapped[str] = mapped_column(String(10), nullable=False)
-    event_datetime: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    sender: Mapped[str] = mapped_column(String(50), nullable=False)
-    message: Mapped[str | None] = mapped_column(String(255), default=None, nullable=True)
+    time_response: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    code: Mapped[str | None] = mapped_column(String(255), default=None, nullable=True)
+
 
 class Proxy(Base):
     __tablename__ = "proxies"

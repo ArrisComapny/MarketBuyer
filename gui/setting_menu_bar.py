@@ -27,7 +27,7 @@ class ProxyEditDialog(QDialog):
         self.password_edit = QLineEdit(proxy.password if proxy else "")
 
         self.scheme_combo = QComboBox()
-        self.scheme_combo.addItems(["http"])
+        self.scheme_combo.addItems(["http","https","socks5"])
         if proxy:
             self.scheme_combo.setCurrentText(proxy.proxy_scheme)
 
