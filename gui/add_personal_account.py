@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QPushButton
 from PySide6.QtWidgets import QLineEdit, QComboBox, QMessageBox, QSizePolicy, QFormLayout
 
+
 from database.db import Database
 from database.models import Account
 
@@ -77,18 +78,23 @@ class AddAccountDialog(QDialog):
         self.btn_save = QPushButton("Сохранить")
         self.btn_cancel = QPushButton("Отмена")
 
+
         for b in (self.btn_save, self.btn_cancel):
             b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             b.setMinimumHeight(38)
 
         self.btn_save.clicked.connect(self.on_save_clicked)
         self.btn_cancel.clicked.connect(self.reject)
+        # self.authorization.clicked.connect(self) # подлючение кнопки (подумать нужна ли она здесь)
 
         if self.account:
             self.fill_from_account()
 
         main_layout.addWidget(self.btn_save)
         main_layout.addWidget(self.btn_cancel)
+
+
+
 
     def on_save_clicked(self):
         name = self.name_edit.text().strip()

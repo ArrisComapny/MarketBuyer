@@ -4,15 +4,20 @@ import subprocess
 from pathlib import Path
 import os
 import sys
+import datetime
+
+import core.app as app_core
+
 
 from playwright.async_api import async_playwright
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-try:
-    from playwright_stealth import stealth_async
-    HAS_STEALTH = True
-except Exception:
-    HAS_STEALTH = False
+
+from sqlalchemy import select, desc, update, insert
+
+
+from database.models import PhoneCode, Account, UsersAccounts, User
+
 
 
 def ensure_browsers():
@@ -22,13 +27,11 @@ def ensure_browsers():
         stderr=subprocess.DEVNULL,
         check=False,
     )
-
-
 ensure_browsers()
 
 
 class BrowserController:
-    def __init__(self, profile_name: str, user_agent: str = "", proxy=None):
+    def __init__(self, user: User, profile_name: str, user_agent: str = "", proxy=None):
         self.profile_dir = Path(os.getcwd()) / "profiles" / profile_name
         self.profile_dir.mkdir(parents=True, exist_ok=True)
 
@@ -36,7 +39,8 @@ class BrowserController:
         self.user_agent = user_agent
         self.proxy = proxy
         self.account = None
-
+        self.page = None
+        self.user = user
 
     async def run(self, mode: str = "activate"):
         async with async_playwright() as p:
@@ -72,42 +76,101 @@ class BrowserController:
             )
 
             pages = self.context.pages
-            page = pages[0] if pages else await self.context.new_page()
+            self.page = pages[0] if pages else await self.context.new_page()
 
-            self.page = page
+            await self.page.goto("https://www.wildberries.ru", timeout=120_000)
 
-            if HAS_STEALTH:
-                await stealth_async(page)
+            print(mode)
 
-            try:
-                # Проверка IP через прокси
-                await page.goto("https://api.ipify.org", wait_until="domcontentloaded", timeout=90000)
-                ip = await page.text_content("body")
-                print("IP через прокси:", (ip or "").strip())
+            if mode == "logout - login":
+                await self.scenario_logout()
+                print("[INFO] logout - login завершён")
 
-                # Стартовая страница
-                await page.goto("https://www.wildberries.ru", wait_until="domcontentloaded", timeout=90000)
 
-                if mode == "activate":
-                    await self._scenario_activate(page)
-                elif mode == "start_process":
-                    await self._scenario_start_process(page)
-                elif mode == "login":
-                    await self._scenario_login(page)
-                else:
-                    print(f"[WARN] Неизвестный mode={mode}, сценарий не запущен")
+            elif mode == "scenario_start_process":
+                print("[INFO] start_process — браузер открыт")
+                await self.scenario_start_process()
 
-                await page.wait_for_event("close", timeout=0)
+            elif mode == "activate":
+                await self.scenario_activate()
+                print("[INFO] scenario activate завершён")
 
-            except Exception as e:
-                print("ОШИБКА:", repr(e))
-                await page.set_content(
-                    f"<h2>Ошибка</h2><pre>{repr(e)}</pre>"
-                    f"<p>Окно не закрываю — закрой вручную.</p>"
+
+
+    @staticmethod
+    async def _update_account(phone10: str, name: str, gender: str | None) -> None:
+
+        async with app_core.db.get_session() as session:
+            await session.execute(
+                update(Account)
+                .where(Account.phone == phone10)
+                .values(
+                    name=name,
+                    male=gender.capitalize(),
                 )
-                await page.wait_for_event("close", timeout=0)
-            finally:
-                await self.close()
+            )
+            await session.commit()
+
+    @staticmethod
+    async def _update_account_status(phone10: str, status: str) -> None:
+        async with app_core.db.get_session() as session:
+            await session.execute(
+                update(Account)
+                .where(Account.phone == phone10)
+                .values(status=status)
+            )
+            await session.commit()
+
+    async def users_accounts(self, phone10: str) -> None:
+        async with app_core.db.get_session() as session:
+
+            # 1️⃣ Проверяем — есть ли уже запись
+            res = await session.execute(
+                select(UsersAccounts).where(UsersAccounts.phone == phone10)
+            )
+            row = res.scalars().first()
+
+            if row is None:
+                # 2️⃣ Если НЕТ — INSERT
+                stmt = insert(UsersAccounts).values(
+                    phone=phone10,
+                    user=self.user.login
+                )
+                await session.execute(stmt)
+                print("INSERT users_accounts", phone10, self.user.login)
+            else:
+                # 3️⃣ Если ЕСТЬ — UPDATE
+                stmt = (
+                    update(UsersAccounts)
+                    .where(UsersAccounts.phone == phone10)
+                    .values(user=self.user.login)
+                )
+                await session.execute(stmt)
+                print("UPDATE users_accounts", phone10, self.user.login)
+
+            await session.commit()
+
+    @staticmethod
+    async def _get_code(phone10):
+
+        msk = datetime.timezone(datetime.timedelta(hours=3))
+        time_request_aware = datetime.datetime.now(msk) - datetime.timedelta(minutes=1)
+        time_request = time_request_aware.replace(tzinfo=None)
+
+        async with app_core.db.get_session() as session:
+            for _ in range(20):
+                stmt = (select(PhoneCode.code)
+                    .where(PhoneCode.phone == phone10, PhoneCode.time_response >= time_request)
+                    .order_by(desc(PhoneCode.time_response))
+                    .limit(1))
+                result = await session.execute(stmt)
+                code = result.scalars().first()
+                if code:
+                    break
+                await asyncio.sleep(5)
+            else:
+                raise Exception("Код не пришел")
+            return code
 
     async def humanize(self, min_ms=300, max_ms=600):
         await self.page.wait_for_timeout(random.randint(min_ms, max_ms))
@@ -116,7 +179,7 @@ class BrowserController:
         await self.page.mouse.wheel(0, random.randint(300, 800))
         await self.page.wait_for_timeout(random.randint(min_ms, max_ms))
 
-    async def human_click(self, element):
+    async def human_click(self, element,offset_x=5, offset_y=5):
         await element.scroll_into_view_if_needed()
         await asyncio.sleep(random.uniform(0.15, 0.4))
 
@@ -124,8 +187,8 @@ class BrowserController:
         if not box:
             return
 
-        x = box["x"] + random.uniform(5, box["width"] - 5)
-        y = box["y"] + random.uniform(5, box["height"] - 5)
+        x = box["x"] + random.uniform(offset_x, box["width"] - offset_x)
+        y = box["y"] + random.uniform(offset_y, box["height"] - offset_y)
 
         await self.page.mouse.move(x, y, steps=random.randint(8, 15))
 
@@ -146,17 +209,7 @@ class BrowserController:
 
     async def wait_full_load(self, timeout: int = 30000):
         await self.page.wait_for_load_state("domcontentloaded", timeout=timeout)
-
-        await self.page.wait_for_timeout(2000)
-
-        try:
-            await self.page.wait_for_selector(
-                "header",
-                timeout=timeout,
-                state="visible"
-            )
-        except PlaywrightTimeoutError:
-            pass
+        await self.page.wait_for_timeout(8000)
 
     async def close_modal(self):
         try:
@@ -166,85 +219,259 @@ class BrowserController:
                 state="visible"
             )
             await self.human_wait()
-            await btn.click()
+            await self.human_click(btn)
         except PlaywrightTimeoutError:
             pass
 
-        return False
+    async def accept_cookie(self):
+        try:
+            cookie_btn = await self.page.wait_for_selector(
+                "button.cookies__btn",
+                timeout=5000,
+                state="visible"
+            )
+            await self.human_wait()
+            await self.human_click(cookie_btn)
+        except PlaywrightTimeoutError:
+            pass
 
-    async def accept_cookie(self, page):
-        # 3) cookies — если есть, кликаем
-        btn = await page.query_selector("button.cookies__btn")
-        if not btn:
-            try:
-                await page.wait_for_selector("button.cookies__btn", timeout=3000)
-                btn = await page.query_selector("button.cookies__btn")
-            except PlaywrightTimeoutError:
-                btn = None
-
-        if btn:
-            await btn.hover()
-            await asyncio.sleep(0.3)
-            await btn.click()
-        else:
-            print("Cookies уже приняты или баннера нет")
-
-    async def login_btn(self, page):
-        account = self.account or {}
-        phone = (account.get("phone10") or "").strip()
-        if not phone:
-            print("self.account.phone10 не задан (не передали account в BrowserController)")
-            return False
-
+    async def click_login_btn(self):
+        phone = self.account.get("phone10")
         # 1) клик "Войти"
         try:
-            btn = await page.wait_for_selector('[data-testid="login"]', timeout=3000)
+            login_btn = await self.page.wait_for_selector('[data-testid="login"]', timeout=5000)
         except PlaywrightTimeoutError:
-            print("Кнопка 'Войти' не найдена")
-            return False
+            raise Exception("Кнопка 'Войти' не найдена")
 
-        await btn.hover()
-        await asyncio.sleep(0.3)
-        await btn.click()
+        await self.human_wait()
+        await self.human_click(login_btn)
+        await self.humanize()
 
         # 2) ввод телефона
         try:
-            inp = await page.wait_for_selector('input[data-testid="phoneInput"]', timeout=5000)
+            phone_inp = await self.page.wait_for_selector(
+                "[data-testid='phoneInput']",
+                timeout=5000,
+                state="visible"
+            )
         except PlaywrightTimeoutError:
-            print("Поле телефона не найдено")
-            return False
+            raise Exception("Окно 'Ввод' не найдено")
 
-        await inp.hover()
-        await asyncio.sleep(0.2)
-        await inp.click()
-        await asyncio.sleep(0.1)
+        await self.human_wait()
+        await self.human_click(phone_inp, offset_x=60)
+        await self.human_type(phone_inp, phone)
+        await self.humanize()
 
-        await inp.fill("")  # важно для маски
+        # 3) Нажимаем на кнопку получить код
+        try:
+            request_code_btn = await self.page.wait_for_selector(
+                "button[data-testid='requestCodeBtn']",
+                timeout=5000,
+                state="visible"
+            )
+        except PlaywrightTimeoutError:
+            raise Exception("Кнопка 'получить код' не найдена")
+        await self.human_wait()
+        await self.human_click(request_code_btn)
+        await self.humanize()
+        # проверка: не вылезло ли ограничение/ошибка
 
-        await self.human_type(inp, phone)
+        # после клика "Получить код"
+
+        await self.page.wait_for_timeout(300)
+
+        error_text = None
+
+        # ждём до 15 секунд, проверяя каждые 300мс
+        for _ in range(15):  # 20 * 300ms = 4.5 сек
+            loc = self.page.locator("span#phoneInputErrorMessage.error--MakvU")
+
+            if await loc.count() > 0:
+                text = (await loc.first.inner_text()).strip()
+                if text:
+                    error_text = text
+                    break
+
+            await self.page.wait_for_timeout(300)
+
+        if error_text:
+            print(f"[{phone}] Ошибка запроса кода: {error_text}")
+            raise Exception(f"[{phone}] Ошибка запроса кода: {error_text}")
+
+        code = await self._get_code(phone)
+        # ждём, что появится хотя бы первое поле
+        await self.page.wait_for_selector(
+            "input[autocomplete='one-time-code']",
+            timeout=15000,
+            state="visible"
+        )
+        inputs = self.page.locator("input[autocomplete='one-time-code']")
+
+        for i, ch in enumerate(code):
+            el = inputs.nth(i)
+            await self.human_click(el)
+            await el.fill(ch)
+
         return True
 
-    async def _scenario_activate(self, page):
-        print("[SCENARIO] activate")
+    async def get_profile_gender(self) -> str | None:
 
-        # 1) ждём загрузку страницы
-        await self.wait_full_load(timeout=30000)
+        male = await self.page.wait_for_selector(
+            "input[data-testid='genderInputMale']",
+            timeout=5000
+        )
+        if await male.is_checked():
+            return "Male"
+
+        female = await self.page.wait_for_selector(
+            "input[data-testid='genderInputFemale']",
+            timeout=5000
+        )
+        if await female.is_checked():
+            return "Female"
+
+        return None
+
+    async def changing_name_and_gender(self):
+        # 1 наводим на иконку кабинета и профиля и нажимаем
+        try:
+            profile_btn = await self.page.wait_for_selector(
+                "span.navbar-pc__icon--profile",
+                timeout=5000,
+                state="visible"
+            )
+        except PlaywrightTimeoutError:
+            print(f"Кнопка 'Кабинета' не найдена")
+            raise Exception("Кнопка 'Кабинета' не найдена")
+
+        await profile_btn.hover()
+        await self.human_wait()
+        await self.human_click(profile_btn)
+
+        try:
+            user_profile_btn = await self.page.wait_for_selector(
+                "h3.user-name--StaCq",
+                timeout=5000,
+                state="visible"
+            )
+        except PlaywrightTimeoutError:
+            print(f"Кнопка 'Профиля' не найдена")
+            raise Exception("Кнопка 'Профиля' не найдена")
+        await self.human_wait()
+        await self.human_click(user_profile_btn)
+
+        # 2. Наводим на имя в личном кабинете для смены имени и гендера
+        try:
+            first_name_input = await self.page.wait_for_selector(
+                "input[data-testid='firstNameInput']",
+                timeout=5000,
+                state="visible"
+            )
+        except PlaywrightTimeoutError:
+            raise Exception("Поле ввода имени не найдено")
+
+        # --- читаем данные из профиля ---
+        profile_name = (await first_name_input.input_value()).strip()
+        profile_gender = await self.get_profile_gender()  # "male" / "female" / None
+
+        phone10 = self.account.get("phone10")
+        if not phone10:
+            print(f"В self.account нет phone10")
+            raise Exception("В self.account нет phone10")
+
+        # СЦЕНАРИЙ 1: имя и пол уже есть → сохраняем в БД
+        if profile_name and profile_gender in ("Male", "Female"):
+            await self._update_account(phone10, profile_name, profile_gender)
+        else:
+            # СЦЕНАРИЙ 2: нет имени ИЛИ нет пола → вводим И имя, И пол (мои)
+
+            my_name = (self.account.get("name") or "").strip()
+            my_gender = self.account.get("gender")  # "male"/"female"/None
+
+            # имя
+            if my_name:
+                await self.human_wait()
+                await self.human_click(first_name_input)
+                await first_name_input.fill("")
+                await self.human_type(first_name_input, my_name)
+
+            # пол
+            print(f"мой гендер {my_gender}")
+            if my_gender not in ("Male", "Female"):
+                my_gender = None  # просто не будем ставить пол
+
+            label_selector = (
+                "label[data-testid='genderOptionMale']"
+                if my_gender == "Male"
+                else "label[data-testid='genderOptionFemale']"
+            )
+
+            label_el = await self.page.wait_for_selector(
+                label_selector,
+                timeout=5000,
+                state="visible"
+            )
+
+            await self.human_wait()
+            await self.humanize()
+            await self.human_click(label_el)
+
+        save_btn = await self.page.wait_for_selector(
+            "span:has-text('Сохранить')",
+            timeout=5000,
+            state="visible"
+        )
+
+        await self.humanize()
+        await self.human_wait()
+        await self.human_click(save_btn)
+        await self._update_account_status(phone10, "login")
+        await self.users_accounts(phone10)
+
+
+
+        # Обновление статуса в БД
+
+
+
+
+
+
+    async def scenario_activate(self):
+        print("[SCENARIO] activate")
+        await self.wait_full_load()
         await self.humanize()
         await self.close_modal()
         await self.humanize()
-        await self.accept_cookie(page)
+        await self.accept_cookie()
         await self.humanize()
-        await self.login_btn(page)
+        await self.click_login_btn()
+        await self.humanize()
+        await self.changing_name_and_gender()
+        await self.human_wait()
+        await self.humanize()
+        await self.close()
 
 
 
-    async def _scenario_start_process(self, page):
-        print("[SCENARIO] start_process")
-        return
 
-    async def _scenario_login(self, page):
-        print("[SCENARIO] login")
-        return
+
+    async def scenario_start_process(self):
+        print("[SCENARIO] start_process- работа с аккаунтом")
+        await self.context.wait_for_event("close")
+
+
+    async def scenario_logout(self):
+        print("[SCENARIO] login - Авторизация")
+        await self.wait_full_load()
+        await self.humanize()
+        await self.close_modal()
+        await self.humanize()
+        await self.accept_cookie()
+        await self.humanize()
+        await self.click_login_btn()
+        await self.close()
+
 
     async def close(self):
         if getattr(self, "context", None):

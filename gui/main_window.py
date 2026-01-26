@@ -1,9 +1,10 @@
 import asyncio
+from functools import partial
 
 from sqlalchemy import select, delete, update
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter
 from PySide6.QtCore import Qt, QSize, Signal, QRect, QTimer, QPropertyAnimation, QEasingCurve
-from PySide6.QtWidgets import QDialog, QHBoxLayout, QPushButton, QMainWindow, QWidget, QVBoxLayout
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QPushButton, QMainWindow, QWidget, QVBoxLayout, QMenu
 from PySide6.QtWidgets import QTableWidgetItem, QTableWidget, QHeaderView, QAbstractItemView, QLineEdit
 from PySide6.QtWidgets import QStyleOptionButton, QStyle, QCheckBox, QMessageBox, QToolButton, QFrame, QLabel
 from qasync import asyncSlot
@@ -16,6 +17,8 @@ from gui.add_personal_account import AddAccountDialog
 from core.browser import BrowserController
 from database.models import Proxy
 from core.proxy_pool import ProxyPool
+
+from shiboken6 import isValid
 
 
 class CheckBoxHeader(QHeaderView):
@@ -295,9 +298,6 @@ class MainWindow(QMainWindow):
         # phone10 -> proxy_id (чтобы потом release прокси)
         self._account_proxy = {}
 
-        # phone10 -> ip (для простой уникальности IP между аккаунтами)
-        self._account_ip: dict[str, str] = {}
-
     @staticmethod
     async def _get_accounts_for_table():
         """
@@ -374,14 +374,20 @@ class MainWindow(QMainWindow):
             btn_settings = QPushButton()
             btn_settings.setIcon(QIcon("templates/icons/setting.png"))
             btn_settings.setIconSize(QSize(20, 20))
-            btn_settings.setFixedSize(35, 25)
+            btn_settings.setFixedSize(25, 25)
             btn_settings.setStyleSheet(self.style_icon_btn)
 
             btn_delete = QPushButton()
             btn_delete.setIcon(QIcon("templates/icons/delete.png"))
             btn_delete.setIconSize(QSize(20, 20))
-            btn_delete.setFixedSize(35, 25)
+            btn_delete.setFixedSize(25, 25)
             btn_delete.setStyleSheet(self.style_icon_btn)
+
+            btn_more_settings = QPushButton()
+            btn_more_settings.setIcon(QIcon("templates/icons/more_setting.png"))
+            btn_more_settings.setIconSize(QSize(20, 20))
+            btn_more_settings.setFixedSize(20, 25)
+            btn_more_settings.setStyleSheet(self.style_icon_btn)
 
             container = QWidget()
             h_layout = QHBoxLayout(container)
@@ -390,6 +396,7 @@ class MainWindow(QMainWindow):
             h_layout.addWidget(btn_run)
             h_layout.addWidget(btn_settings)
             h_layout.addWidget(btn_delete)
+            h_layout.addWidget(btn_more_settings)
 
             self.table.setCellWidget(row, 4, container)
 
@@ -411,6 +418,8 @@ class MainWindow(QMainWindow):
             btn_run.clicked.connect(lambda _, r=row, b=btn_run: self.on_run_clicked_row(r, b))
             btn_settings.clicked.connect(lambda _, r=row: self.on_settings_clicked(r))
             btn_delete.clicked.connect(lambda _, r=row: self.on_delete_clicked(r))
+            btn_more_settings.clicked.connect(partial(self.show_more_settings_menu,
+                                                      btn_more_settings, phone, btn_run))
 
         # Применяем фильтры после заполнения
         self.apply_filters()
@@ -541,7 +550,7 @@ class MainWindow(QMainWindow):
         btn.setProperty("old_text", btn.text())
 
         # блокируем settings/delete на время работы
-        self._set_actions_container_enabled(btn, False)
+        self.set_actions_container_enabled(btn, False)
 
         if status == "disable":
             btn.setText("Активируется…")
@@ -561,21 +570,21 @@ class MainWindow(QMainWindow):
             btn.setStyleSheet(self.style_run_btn_disabled)
             self.login_account(phone10, btn)
 
-    def closeEvent(self, event):
-        """
-        Перехватывает закрытие окна.
-        Первый раз: отменяет закрытие и запускает асинхронное выключение:
-        - отмена browser tasks
-        - закрытие браузеров
-        Затем повторно вызывает self.close().
-        """
-        if self._closing:
-            event.accept()
-            return
-
-        event.ignore()
-        self.setEnabled(False)
-        asyncio.create_task(self._shutdown_and_close())
+    # def closeEvent(self, event):
+    #     """
+    #     Перехватывает закрытие окна.
+    #     Первый раз: отменяет закрытие и запускает асинхронное выключение:
+    #     - отмена browser tasks
+    #     - закрытие браузеров
+    #     Затем повторно вызывает self.close().
+    #     """
+    #     if self._closing:
+    #         event.accept()
+    #         return
+    #
+    #     event.ignore()
+    #     self.setEnabled(False)
+    #     asyncio.create_task(self._shutdown_and_close())
 
     async def _shutdown_and_close(self):
         """
@@ -622,7 +631,7 @@ class MainWindow(QMainWindow):
         ua = (account.get("user_agent") if account else "") or ""
 
         # 2) Берём прокси и его текущий IP
-        proxy, ip, msg = await self.proxy_pool.acquire_unique()
+        proxy, msg = await self.proxy_pool.acquire()
         print(f"[proxy] {msg}")
 
         # Если прокси не выдали — восстанавливаем UI и выходим
@@ -630,37 +639,23 @@ class MainWindow(QMainWindow):
             if not self._closing:
                 self._show_warning("Прокси", msg)
             self._restore_btn(btn)
-            self._set_actions_container_enabled(btn, True)
+            self.set_actions_container_enabled(btn, True)
             return
 
-        # 2.1) Проверяем уникальность IP (простая: среди уже запущенных аккаунтов)
-        for other_phone, other_ip in self._account_ip.items():
-            if other_ip == ip and other_phone != phone10:
-                self._show_warning(
-                    "IP не уникален",
-                    f"IP {ip} уже используется аккаунтом {other_phone}"
-                )
-
-                # Возвращаем прокси обратно в пул
-                await self.proxy_pool.release(proxy.id)
-
-                # Восстанавливаем UI
-                self._restore_btn(btn)
-                self._set_actions_container_enabled(btn, True)
-                return
-
         # 2.2) Сохраняем, что этот аккаунт использует такой IP/прокси
-        self._account_ip[phone10] = ip
+
         self._account_proxy[phone10] = proxy.id
 
-        print(f"[{phone10}] mode={mode}, proxy_id={proxy.id}, ip={ip}")
+        print(f"[{phone10}] mode={mode}, proxy_id={proxy.id}")
 
         # 3) Запускаем браузер через контроллер
         controller = BrowserController(
             profile_name=phone10,
             user_agent=ua,
             proxy=proxy,
+            user=self.user,
         )
+        controller.account = account
         self._browser_controllers[phone10] = controller
 
         task = asyncio.create_task(controller.run(mode=mode))
@@ -669,7 +664,6 @@ class MainWindow(QMainWindow):
         # Cleanup после завершения задачи
         def _cleanup(t: asyncio.Task):
             async def _async_cleanup():
-                # 1) гасим исключения/отмену (чтобы не падало в callback)
                 try:
                     t.result()
                 except asyncio.CancelledError:
@@ -677,25 +671,30 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
 
-                # 2) освобождаем прокси
                 proxy_id = self._account_proxy.pop(phone10, None)
                 if proxy_id is not None:
                     await self.proxy_pool.release(proxy_id)
 
-                # 3) убираем IP аккаунта
-                self._account_ip.pop(phone10, None)
+                # ✅ ВОТ СЮДА ВСТАВИТЬ
+                if self._closing or btn is None or not isValid(btn):
+                    # чистим ссылки и выходим, UI трогать нельзя
+                    self._browser_tasks.pop(phone10, None)
+                    self._browser_controllers.pop(phone10, None)
+                    return
 
-                # 4) восстанавливаем UI (если окно не закрывается)
-                if not self._closing:
-                    old_text = btn.property("old_text") or "Запуск"
-                    btn.setText(old_text)
-                    btn.setDisabled(False)
-                    btn.setStyleSheet(self.style_run_btn)
-                    self._set_actions_container_enabled(btn, True)
+                # 4) восстанавливаем UI
+                old_text = btn.property("old_text") or "Запуск"
+                btn.setText(old_text)
+                btn.setDisabled(False)
+                btn.setStyleSheet(self.style_run_btn)
+                self.set_actions_container_enabled(btn, True)
 
                 # 5) чистим ссылки на таск/контроллер
                 self._browser_tasks.pop(phone10, None)
                 self._browser_controllers.pop(phone10, None)
+
+                # 6) обновляем таблицу
+                await self.load_accounts()
 
             asyncio.create_task(_async_cleanup())
 
@@ -703,24 +702,21 @@ class MainWindow(QMainWindow):
 
     @asyncSlot()
     async def activate_account(self, phone10: str, btn: QPushButton) -> None:
-        """
-        Запуск аккаунта в режиме "activate".
-        """
+        """Запуск аккаунта в режиме "activate"."""
+
         await self._run_account_with_proxy(phone10, btn, mode="activate")
 
     @asyncSlot()
     async def start_process(self, phone10: str, btn: QPushButton) -> None:
-        """
-        Запуск аккаунта в режиме "start_process".
-        """
-        await self._run_account_with_proxy(phone10, btn, mode="start_process")
+        """Запуск аккаунта в режиме "start_process"."""
+
+        await self._run_account_with_proxy(phone10, btn, mode="scenario_start_process")
 
     @asyncSlot()
     async def login_account(self, phone10: str, btn: QPushButton) -> None:
-        """
-        Запуск аккаунта в режиме "login".
-        """
-        await self._run_account_with_proxy(phone10, btn, mode="login")
+        """ Запуск аккаунта в режиме "login"."""
+
+        await self._run_account_with_proxy(phone10, btn, mode="logout - login")
 
     def _restore_btn(self, btn: QPushButton) -> None:
         """
@@ -735,7 +731,7 @@ class MainWindow(QMainWindow):
         btn.setDisabled(False)
         btn.setStyleSheet(self.style_run_btn)
 
-        self._set_actions_container_enabled(btn, True)
+        self.set_actions_container_enabled(btn, True)
 
     @asyncSlot()
     async def on_settings_clicked(self, row: int) -> None:
@@ -806,6 +802,18 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.Yes:
             asyncio.create_task(self.delete_account_async(phone10))
 
+    def show_more_settings_menu(self, btn_more: QPushButton, phone10: str, btn_run: QPushButton):
+        menu = QMenu(btn_more)
+        act_open_profile = QAction("Авторизовать", menu)
+
+        def _run_login(_checked=False):
+            self.login_account(phone10, btn_run)
+            # asyncio.create_task(self.login_account(phone10, btn_run))
+
+        act_open_profile.triggered.connect(_run_login)
+        menu.addAction(act_open_profile)
+        menu.exec(btn_more.mapToGlobal(btn_more.rect().bottomLeft()))
+
     def _row_checkbox(self, row: int) -> QCheckBox | None:
         """
         Возвращает QCheckBox, который находится в 0-й колонке указанной строки.
@@ -814,12 +822,6 @@ class MainWindow(QMainWindow):
         return w.findChild(QCheckBox) if w else None
 
     def on_header_checkbox_clicked(self, state: Qt.CheckState) -> None:
-        """
-        Клик по чекбоксу в заголовке:
-        - отмечает/снимает все строки
-        - подсвечивает строки
-        - выставляет header state (Checked/Unchecked)
-        """
         checked = (state == Qt.Checked)
 
         self.table.setUpdatesEnabled(False)
@@ -925,7 +927,7 @@ class MainWindow(QMainWindow):
         new_comment = item.text().strip()
         asyncio.create_task(self._save_comment_async(phone10, new_comment))
 
-    def _norm_status(self, s: str) -> str:
+    def norm_status(self, s: str) -> str:
         """
         Нормализует статус: lower + strip, чтобы сравнения были стабильными.
         """
@@ -956,7 +958,7 @@ class MainWindow(QMainWindow):
         for row in range(self.table.rowCount()):
             # статус из колонки 2
             st_item = self.table.item(row, 2)
-            st = self._norm_status(st_item.text() if st_item else "")
+            st = self.norm_status(st_item.text() if st_item else "")
             status_ok = status_show_all or (st in allowed)
 
             # поиск по телефону и комменту
@@ -983,7 +985,7 @@ class MainWindow(QMainWindow):
         """
         self.apply_filters()
 
-    def _set_actions_container_enabled(self, run_btn: QPushButton, enabled: bool) -> None:
+    def set_actions_container_enabled(self, run_btn: QPushButton, enabled: bool) -> None:
         """
         Включает/выключает кнопки settings/delete в той же ячейке, где run_btn.
         Сам run_btn не трогаем — он управляется отдельно.

@@ -67,6 +67,8 @@ class ProxyEditDialog(QDialog):
         password = self.password_edit.text().strip()
         change_url = self.change_ip_edit.text().strip()
 
+
+
         if not host:
             QMessageBox.warning(self, "Ошибка", "Host обязателен.")
             self.host_edit.setFocus()
