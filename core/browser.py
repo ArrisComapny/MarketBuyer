@@ -74,16 +74,17 @@ class BrowserController:
                     "--disable-infobars",
                 ],
             )
-
+            self.context.set_default_timeout(0)
+            self.context.set_default_navigation_timeout(0)
             pages = self.context.pages
             self.page = pages[0] if pages else await self.context.new_page()
 
-            await self.page.goto("https://www.wildberries.ru", timeout=120_000)
+            await self.page.goto("https://www.wildberries.ru")
 
             print(mode)
 
-            if mode == "logout - login":
-                await self.scenario_logout()
+            if mode == "logout-login":
+                await self.scenario_logout(self.account.get("phone10"))
                 print("[INFO] logout - login завершён")
 
 
@@ -428,15 +429,6 @@ class BrowserController:
         await self._update_account_status(phone10, "login")
         await self.users_accounts(phone10)
 
-
-
-        # Обновление статуса в БД
-
-
-
-
-
-
     async def scenario_activate(self):
         print("[SCENARIO] activate")
         await self.wait_full_load()
@@ -452,16 +444,12 @@ class BrowserController:
         await self.humanize()
         await self.close()
 
-
-
-
-
     async def scenario_start_process(self):
         print("[SCENARIO] start_process- работа с аккаунтом")
-        await self.context.wait_for_event("close")
+        await self.context.wait_for_event("close", timeout=0)
 
 
-    async def scenario_logout(self):
+    async def scenario_logout(self,phone10):
         print("[SCENARIO] login - Авторизация")
         await self.wait_full_load()
         await self.humanize()
@@ -470,6 +458,7 @@ class BrowserController:
         await self.accept_cookie()
         await self.humanize()
         await self.click_login_btn()
+        await self._update_account_status(phone10, "login")
         await self.close()
 
 

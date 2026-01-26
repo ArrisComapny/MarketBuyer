@@ -40,7 +40,6 @@ class UsersAccounts(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user: Mapped[str] = mapped_column(String(20), ForeignKey("users.login", ondelete="CASCADE"), nullable=False)
     phone: Mapped[str] = mapped_column(String(10), ForeignKey("accounts.phone", ondelete="CASCADE"), nullable=False)
-    # path: Mapped[str] = mapped_column(String(20), nullable=False)
 
     user_ref: Mapped["User"] = relationship("User", back_populates="accounts_link")
     account_ref: Mapped["Account"] = relationship("Account", back_populates="users_link")

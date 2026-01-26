@@ -1,5 +1,10 @@
+import os
 import asyncio
+import shutil
+import asyncio
+
 from functools import partial
+from pathlib import Path
 
 from sqlalchemy import select, delete, update
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter
@@ -10,10 +15,11 @@ from PySide6.QtWidgets import QStyleOptionButton, QStyle, QCheckBox, QMessageBox
 from qasync import asyncSlot
 
 from database.db import Database
-from database.models import Account
+from database.models import Account, UsersAccounts
 from gui.setting_menu_bar import ProxyManagerDialog
 from gui.add_personal_account import AddAccountDialog
 
+import core.app as app_core
 from core.browser import BrowserController
 from database.models import Proxy
 from core.proxy_pool import ProxyPool
@@ -716,7 +722,7 @@ class MainWindow(QMainWindow):
     async def login_account(self, phone10: str, btn: QPushButton) -> None:
         """ Запуск аккаунта в режиме "login"."""
 
-        await self._run_account_with_proxy(phone10, btn, mode="logout - login")
+        await self._run_account_with_proxy(phone10, btn, mode="logout-login")
 
     def _restore_btn(self, btn: QPushButton) -> None:
         """
@@ -803,15 +809,25 @@ class MainWindow(QMainWindow):
             asyncio.create_task(self.delete_account_async(phone10))
 
     def show_more_settings_menu(self, btn_more: QPushButton, phone10: str, btn_run: QPushButton):
-        menu = QMenu(btn_more)
-        act_open_profile = QAction("Авторизовать", menu)
+        self._more_menu = QMenu(btn_more)
+        menu = self._more_menu
+
+        act_open_profile = QAction("Авторизовать заново", menu)
+        act_delete_cache = QAction("Удалить с компьютера", menu)
 
         def _run_login(_checked=False):
             self.login_account(phone10, btn_run)
-            # asyncio.create_task(self.login_account(phone10, btn_run))
+
+        def _delete_cache(_checked=False):
+            self.delete_account_cache(phone10)
 
         act_open_profile.triggered.connect(_run_login)
+        act_delete_cache.triggered.connect(_delete_cache)
+
         menu.addAction(act_open_profile)
+        menu.addSeparator()
+        menu.addAction(act_delete_cache)
+
         menu.exec(btn_more.mapToGlobal(btn_more.rect().bottomLeft()))
 
     def _row_checkbox(self, row: int) -> QCheckBox | None:
@@ -1051,4 +1067,57 @@ class MainWindow(QMainWindow):
                 "user_agent": user_agent or "",
                 "comment": comment or "",
             }
+
+    def _rm_readonly(self, func, path, _excinfo):
+        try:
+            os.chmod(path, 0o777)
+        except Exception:
+            pass
+        try:
+            func(path)
+        except Exception:
+            pass
+
+    async def _delete_users_account_row(self, phone10: str, user_login: str) -> None:
+        async with app_core.db.get_session() as session:
+            await session.execute(
+                delete(UsersAccounts).where(
+                    UsersAccounts.phone == phone10,
+                    UsersAccounts.user == user_login
+                )
+            )
+            await session.commit()
+
+    def delete_account_cache(self, phone10: str) -> None:
+        phone10 = str(phone10).strip()
+        user_login = self.user.login
+        profile_path = Path(os.getcwd()) / "profiles" / phone10
+
+        async def _do():
+            # 1) удалить строку из users_accounts
+            await self._delete_users_account_row(phone10, user_login)
+
+            # 2) поставить статус logout
+            await self._set_account_status_logout(phone10)
+
+            # 3) удалить папку профиля
+            def _rm_folder():
+                if profile_path.exists():
+                    shutil.rmtree(profile_path, onerror=self._rm_readonly)
+
+            await asyncio.to_thread(_rm_folder)
+
+            # 4) обновить таблицу
+            await self.load_accounts()
+
+        asyncio.create_task(_do())
+
+    async def _set_account_status_logout(self, phone10: str) -> None:
+        async with app_core.db.get_session() as session:
+            await session.execute(
+                update(Account)
+                .where(Account.phone == phone10)
+                .values(status="logout")
+            )
+            await session.commit()
 
