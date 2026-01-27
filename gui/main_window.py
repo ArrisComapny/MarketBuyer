@@ -1,109 +1,39 @@
 import os
-import asyncio
+import stat
 import shutil
 import asyncio
 
 from functools import partial
-from pathlib import Path
+from shiboken6 import isValid
+from types import TracebackType
+from typing import Sequence, Callable, Type
 
-from sqlalchemy import select, delete, update
-from PySide6.QtGui import QAction, QColor, QIcon, QPainter
-from PySide6.QtCore import Qt, QSize, Signal, QRect, QTimer, QPropertyAnimation, QEasingCurve
-from PySide6.QtWidgets import QDialog, QHBoxLayout, QPushButton, QMainWindow, QWidget, QVBoxLayout, QMenu
-from PySide6.QtWidgets import QTableWidgetItem, QTableWidget, QHeaderView, QAbstractItemView, QLineEdit
-from PySide6.QtWidgets import QStyleOptionButton, QStyle, QCheckBox, QMessageBox, QToolButton, QFrame, QLabel
+
+from sqlalchemy import Row
 from qasync import asyncSlot
-
-from database.db import Database
-from database.models import Account, UsersAccounts
-from gui.setting_menu_bar import ProxyManagerDialog
-from gui.add_personal_account import AddAccountDialog
+from PySide6.QtGui import QAction, QColor, QIcon
+from PySide6.QtCore import Qt, QSize, QTimer, QPropertyAnimation, QEasingCurve
+from PySide6.QtWidgets import QCheckBox, QToolButton, QFrame, QLabel, QHBoxLayout
+from PySide6.QtWidgets import QHeaderView, QAbstractItemView, QLineEdit, QPushButton
+from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QMenu, QTableWidgetItem, QTableWidget
 
 import core.app as app_core
-from core.browser import BrowserController
-from database.models import Proxy
+
+from config import PROFILE_DIR
 from core.proxy_pool import ProxyPool
-
-from shiboken6 import isValid
-
-
-class CheckBoxHeader(QHeaderView):
-    """
-    Заголовок таблицы с чекбоксом в первой колонке (Select All).
-    Позволяет выделять/снимать выделение со всех строк одним кликом.
-    """
-    clicked = Signal(Qt.CheckState)
-
-    def __init__(self, orientation, parent=None) -> None:
-        """
-        Инициализация заголовка:
-        - _rect: область чекбокса, чтобы понимать, куда кликнули
-        - _state: текущее состояние чекбокса (Unchecked/Checked/PartiallyChecked)
-        """
-        super().__init__(orientation, parent)
-        self._rect = QRect()
-        self._state = Qt.Unchecked
-        self.setSectionsClickable(True)
-
-    def paintSection(self, painter: QPainter, rect: QRect, logicalIndex: int) -> None:
-        """
-        Рисуем стандартный заголовок + добавляем чекбокс в первой колонке (logicalIndex == 0).
-        """
-        super().paintSection(painter, rect, logicalIndex)
-        if logicalIndex != 0:
-            return
-
-        opt = QStyleOptionButton()
-        opt.state = QStyle.State_Enabled
-
-        # Проставляем визуальное состояние чекбокса
-        if self._state == Qt.Checked:
-            opt.state |= QStyle.State_On
-        elif self._state == Qt.PartiallyChecked:
-            opt.state |= QStyle.State_NoChange
-        else:
-            opt.state |= QStyle.State_Off
-
-        # Центруем чекбокс внутри ячейки заголовка
-        size = self.style().pixelMetric(QStyle.PM_IndicatorWidth)
-        x = rect.x() + (rect.width() - size) // 2
-        y = rect.y() + (rect.height() - size) // 2
-        self._rect = QRect(x, y, size, size)
-        opt.rect = self._rect
-
-        # Рисуем чекбокс
-        self.style().drawControl(QStyle.CE_CheckBox, opt, painter)
-
-    def mousePressEvent(self, event) -> None:
-        """
-        Если клик попал в прямоугольник чекбокса — переключаем состояние и эмитим сигнал.
-        Иначе — обычное поведение заголовка.
-        """
-        if self._rect.contains(event.pos()):
-            new_state = Qt.Unchecked if self._state == Qt.Checked else Qt.Checked
-            self.clicked.emit(new_state)
-            return
-        super().mousePressEvent(event)
-
-    def setState(self, state: Qt.CheckState) -> None:
-        """
-        Принудительно устанавливаем состояние чекбокса в заголовке.
-        Используется, когда часть строк выделена (PartiallyChecked) или все/ничего.
-        """
-        self._state = state
-        self.viewport().update()
+from utils.phone import format_phone_ru
+from core.browser import BrowserController
+from utils.messagebox import CustomMessageBox
+from gui.check_box_header import CheckBoxHeader
+from gui.setting_menu_bar import ProxyManagerDialog
+from gui.add_personal_account import AddAccountDialog
+from database.repositories import AccountRepo, UsersAccountsRepo
 
 
 class MainWindow(QMainWindow):
     def __init__(self, user) -> None:
-        """
-        Создаёт UI главного окна:
-        - меню
-        - панель поиска/кнопок
-        - панель фильтра статусов (с анимацией)
-        - таблица аккаунтов
-        Также инициализирует структуры для управления браузерами/прокси.
-        """
+        """Создаёт UI главного окна. Также инициализирует структуры для управления браузерами/прокси."""
+
         super().__init__()
         self.user = user
 
@@ -118,7 +48,7 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(8)
 
-        # ================== 1) Верхняя строка: поиск слева + кнопки справа ==================
+        # ================== Верхняя строка: поиск слева + кнопки справа ==================
         top_row = QHBoxLayout()
         top_row.setContentsMargins(0, 0, 0, 0)
         top_row.setSpacing(10)
@@ -132,7 +62,7 @@ class MainWindow(QMainWindow):
 
         # Иконка лупы в поле поиска
         icon_action = QAction(QIcon("templates/icons/find.png"), "", self)
-        self.search_input.addAction(icon_action, QLineEdit.LeadingPosition)
+        self.search_input.addAction(icon_action, QLineEdit.ActionPosition.LeadingPosition)
 
         # Кнопки управления
         self.btn_add = QPushButton("Добавить ЛК")
@@ -161,7 +91,7 @@ class MainWindow(QMainWindow):
 
         # ================== Панель фильтра (скрывается/показывается анимацией) ==================
         self.filter_panel = QFrame()
-        self.filter_panel.setFrameShape(QFrame.StyledPanel)
+        self.filter_panel.setFrameShape(QFrame.Shape.StyledPanel)
         self.filter_panel.setVisible(False)
         self.filter_panel.setMaximumHeight(0)
 
@@ -207,7 +137,7 @@ class MainWindow(QMainWindow):
         # Анимация разворачивания/сворачивания фильтра
         self.filter_anim = QPropertyAnimation(self.filter_panel, b"maximumHeight", self)
         self.filter_anim.setDuration(180)
-        self.filter_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.filter_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
         self.btn_filter.toggled.connect(self.toggle_filter_panel)
 
@@ -216,7 +146,7 @@ class MainWindow(QMainWindow):
         self.cb_login.toggled.connect(self.apply_filters)
         self.cb_logout.toggled.connect(self.apply_filters)
 
-        # ================== 2) Таблица ==================
+        # ================== Таблица ==================
         self.table = QTableWidget()
 
         # Флаг, чтобы не обрабатывать on_table_item_changed при массовом заполнении
@@ -224,29 +154,31 @@ class MainWindow(QMainWindow):
         self.table.itemChanged.connect(self.on_table_item_changed)
 
         # Разрешаем редактирование только двойным кликом/Enter
-        self.table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
+        self.table.setEditTriggers(
+            QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.EditKeyPressed
+        )
 
         self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(["", "Номер телефона", "Статус", "Комментарий", "Действие"])
-        self.table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
 
         # Заголовок с Select-All чекбоксом
-        self.header = CheckBoxHeader(Qt.Horizontal, self.table)
+        self.header = CheckBoxHeader(Qt.Orientation.Horizontal, self.table)
         self.table.setHorizontalHeader(self.header)
         self.header.clicked.connect(self.on_header_checkbox_clicked)
 
         # Настройки ширин колонок
         hdr = self.table.horizontalHeader()
-        hdr.setSectionResizeMode(0, QHeaderView.Fixed)
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self.table.setColumnWidth(0, 36)
 
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
-        header.setSectionResizeMode(0, QHeaderView.Fixed)
-        header.setSectionResizeMode(1, QHeaderView.Interactive)
-        header.setSectionResizeMode(2, QHeaderView.Interactive)
-        header.setSectionResizeMode(3, QHeaderView.Stretch)
-        header.setSectionResizeMode(4, QHeaderView.Fixed)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
 
         self.table.setColumnWidth(1, 120)
         self.table.setColumnWidth(2, 110)
@@ -254,7 +186,7 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(self.table, stretch=1)
 
-        # Стили кнопок (иконок и "run")
+        # Стили кнопок
         style_btn = """
         QPushButton {
             border: none; 
@@ -265,6 +197,7 @@ class MainWindow(QMainWindow):
             border-radius: 4px;
         }
         """
+
         style_run_btn = """
                 QPushButton {
                     border: 1px solid white; 
@@ -275,6 +208,7 @@ class MainWindow(QMainWindow):
                     border-radius: 4px;
                 }
                 """
+
         self.style_run_btn_disabled = """
         QPushButton {
             border: 1px solid #888;
@@ -286,10 +220,10 @@ class MainWindow(QMainWindow):
         self.style_icon_btn = style_btn
         self.style_run_btn = style_run_btn
 
-        # Загружаем аккаунты после первого цикла событий Qt (чтобы UI успел показаться)
+        # Загружаем аккаунты после первого цикла событий Qt
         QTimer.singleShot(0, self.load_accounts)
 
-        # Флаг завершения приложения (важно, чтобы не трогать UI после закрытия)
+        # Флаг завершения приложения
         self._closing = False
 
         # phone10 -> asyncio.Task (запущенный browser task)
@@ -304,36 +238,24 @@ class MainWindow(QMainWindow):
         # phone10 -> proxy_id (чтобы потом release прокси)
         self._account_proxy = {}
 
-    @staticmethod
-    async def _get_accounts_for_table():
-        """
-        Читает из БД список аккаунтов для таблицы:
-        phone, comment, status.
-        Возвращает список строк (tuple).
-        """
-        async with Database().get_session() as session:
-            stmt = select(Account.phone, Account.comment, Account.status).order_by(Account.phone.desc())
-            res = await session.execute(stmt)
-            return res.all()
-
     @asyncSlot()
     async def load_accounts(self) -> None:
         """
         Загружает данные из БД и заполняет таблицу.
         asyncSlot позволяет безопасно вызывать из Qt-сигналов.
         """
-        rows = await self._get_accounts_for_table()
+
+        async with app_core.db.get_session() as session:
+            rows = await AccountRepo.get_list_accounts(session)
+
         self.fill_table(rows)
 
-    def fill_table(self, rows) -> None:
+    def fill_table(self, rows: Sequence[Row[tuple[str, str | None, str | None]]]) -> None:
         """
-        Полностью перерисовывает таблицу по данным rows:
-        - чекбокс в 0-й колонке
-        - phone/status/comment
-        - кнопки run/settings/delete
-        - подсветка статуса цветом
+        Полностью перерисовывает таблицу по данным rows.
         Также в конце применяет фильтры и сбрасывает чекбокс заголовка.
         """
+
         self._filling_table = True
         self.table.blockSignals(True)
         self.table.setRowCount(len(rows))
@@ -353,17 +275,17 @@ class MainWindow(QMainWindow):
             checkbox.stateChanged.connect(lambda _s, cb=checkbox: self.on_row_checkbox_changed(cb))
 
             # Форматируем телефон для отображения
-            phone_view = self._format_phone_ru(phone)
+            phone_view = format_phone_ru(phone)
 
             # ---------- ДАННЫЕ ----------
             item_phone = QTableWidgetItem(phone_view)
             # В UserRole храним оригинальный phone10 (чтобы удобно обращаться к БД/профилю)
-            item_phone.setData(Qt.UserRole, phone)
-            item_phone.setFlags(item_phone.flags() & ~Qt.ItemIsEditable)
+            item_phone.setData(Qt.ItemDataRole.UserRole, phone)
+            item_phone.setFlags(item_phone.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(row, 1, item_phone)
 
             item_status = QTableWidgetItem(status or "")
-            item_status.setFlags(item_status.flags() & ~Qt.ItemIsEditable)
+            item_status.setFlags(item_status.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(row, 2, item_status)
 
             item_comment = QTableWidgetItem(comment or "")
@@ -434,23 +356,19 @@ class MainWindow(QMainWindow):
         self._filling_table = False
 
         # Сброс header checkbox
-        self.header.setState(Qt.Unchecked)
-        self.table.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
+        self.header.setState(Qt.CheckState.Unchecked)
+        self.table.horizontalHeader().setSortIndicator(-1, Qt.SortOrder.AscendingOrder)
 
     def create_menu_bar(self) -> None:
-        """
-        Создаёт меню приложения:
-        - Файл (Открыть/Сохранить/Выход)
-        - Настройки (ProxyManager)
-        - Справка (О программе)
-        """
+        """Создаёт меню приложения."""
+
         menu_bar = self.menuBar()
 
         file_menu = menu_bar.addMenu("Файл")
         settings_menu = menu_bar.addMenu("Настройки")
         help_menu = menu_bar.addMenu("Справка")
 
-        # Рисуем линию под менюшкой
+        # Рисуем линию под меню
         self.menuBar().setStyleSheet("""
         QMenuBar {
             border-bottom: 1px solid #d0d0d0;
@@ -478,14 +396,10 @@ class MainWindow(QMainWindow):
         help_menu.addAction(about_action)
 
     def toggle_filter_panel(self, opened: bool) -> None:
-        """
-        Показывает/скрывает панель фильтра с анимацией по maximumHeight.
-        opened=True  -> разворачиваем
-        opened=False -> сворачиваем и скрываем в конце анимации
-        """
+        """Показывает/скрывает панель фильтра с анимацией по maximumHeight."""
+
         self.filter_anim.stop()
 
-        # Если ранее подключали finished->hide, отключаем, чтобы не копить слоты
         if self._filter_hide_slot:
             self.filter_anim.finished.disconnect(self._filter_hide_slot)
             self._filter_hide_slot = None
@@ -514,23 +428,16 @@ class MainWindow(QMainWindow):
             self.filter_anim.start()
 
     def add_personal_account(self) -> None:
-        """
-        Открывает диалог добавления аккаунта.
-        После сохранения — перезагружает таблицу.
-        """
+        """Открывает диалог добавления аккаунта. После сохранения — перезагружает таблицу."""
+
         dlg = AddAccountDialog(self)
         dlg.account_saved.connect(self.load_accounts)
         dlg.exec()
 
     def open_settings(self) -> None:
-        """
-        Открывает окно настройки прокси (ProxyManagerDialog).
-        """
+        """Открывает окно настройки прокси."""
         dlg = ProxyManagerDialog(self)
         result = dlg.exec()
-
-        if result == QDialog.Accepted:
-            print("Настройки сохранены")
 
     def on_run_clicked_row(self, row: int, btn: QPushButton) -> None:
         """
@@ -546,17 +453,15 @@ class MainWindow(QMainWindow):
         """
         phone_item = self.table.item(row, 1)
         status_item = self.table.item(row, 2)
-        if not phone_item or not status_item:
-            return
 
-        phone10 = phone_item.data(Qt.UserRole)
+        phone10 = phone_item.data(Qt.ItemDataRole.UserRole)
         status = (status_item.text() or "").strip().lower()
 
         # сохраняем исходный текст, чтобы потом вернуть
         btn.setProperty("old_text", btn.text())
 
         # блокируем settings/delete на время работы
-        self.set_actions_container_enabled(btn, False)
+        self._set_actions_container_enabled(btn, False)
 
         if status == "disable":
             btn.setText("Активируется…")
@@ -592,7 +497,7 @@ class MainWindow(QMainWindow):
     #     self.setEnabled(False)
     #     asyncio.create_task(self._shutdown_and_close())
 
-    async def _shutdown_and_close(self):
+    async def shutdown_and_close(self):
         """
         Асинхронное завершение:
         1) отменяет все таски браузеров
@@ -600,6 +505,7 @@ class MainWindow(QMainWindow):
         3) ждёт завершения
         4) ставит флаг _closing и закрывает окно повторно
         """
+
         tasks = list(self._browser_tasks.values())
         for t in tasks:
             if t and not t.done():
@@ -614,17 +520,8 @@ class MainWindow(QMainWindow):
         self.setEnabled(True)
         self.close()
 
-    async def _run_account_with_proxy(self, phone10: str, btn: QPushButton, mode: str) -> None:
-        """
-        Универсальный запуск аккаунта с прокси и контролем уникальности IP:
-        - проверяет, не запущен ли уже аккаунт
-        - берёт UA из БД
-        - берёт прокси из pool + получает IP
-        - проверяет уникальность IP относительно других запущенных аккаунтов
-        - создаёт BrowserController и asyncio.Task
-        - в done_callback делает cleanup: release proxy, очистка ip, восстановление UI
-        """
-        print(f"{mode.upper()}", phone10)
+    async def run_account_with_proxy(self, phone10: str, btn: QPushButton, mode: str) -> None:
+        """Универсальный запуск аккаунта с прокси."""
 
         # Защита от повторного запуска
         old_task = self._browser_tasks.get(phone10)
@@ -634,7 +531,7 @@ class MainWindow(QMainWindow):
 
         # 1) Берём user-agent из БД
         account = await self._get_account_by_phone(phone10)
-        ua = (account.get("user_agent") if account else "") or ""
+        ua = account.get("user_agent", "") if account else ""
 
         # 2) Берём прокси и его текущий IP
         proxy, msg = await self.proxy_pool.acquire()
@@ -644,15 +541,12 @@ class MainWindow(QMainWindow):
         if not proxy:
             if not self._closing:
                 self._show_warning("Прокси", msg)
-            self._restore_btn(btn)
-            self.set_actions_container_enabled(btn, True)
+            self.restore_btn(btn)
+            self._set_actions_container_enabled(btn, True)
             return
 
-        # 2.2) Сохраняем, что этот аккаунт использует такой IP/прокси
-
+        # Сохраняем, что этот аккаунт использует такой прокси
         self._account_proxy[phone10] = proxy.id
-
-        print(f"[{phone10}] mode={mode}, proxy_id={proxy.id}")
 
         # 3) Запускаем браузер через контроллер
         controller = BrowserController(
@@ -693,7 +587,7 @@ class MainWindow(QMainWindow):
                 btn.setText(old_text)
                 btn.setDisabled(False)
                 btn.setStyleSheet(self.style_run_btn)
-                self.set_actions_container_enabled(btn, True)
+                self._set_actions_container_enabled(btn, True)
 
                 # 5) чистим ссылки на таск/контроллер
                 self._browser_tasks.pop(phone10, None)
@@ -710,78 +604,62 @@ class MainWindow(QMainWindow):
     async def activate_account(self, phone10: str, btn: QPushButton) -> None:
         """Запуск аккаунта в режиме "activate"."""
 
-        await self._run_account_with_proxy(phone10, btn, mode="activate")
+        await self.run_account_with_proxy(phone10, btn, mode="activate")
 
     @asyncSlot()
     async def start_process(self, phone10: str, btn: QPushButton) -> None:
         """Запуск аккаунта в режиме "start_process"."""
 
-        await self._run_account_with_proxy(phone10, btn, mode="scenario_start_process")
+        await self.run_account_with_proxy(phone10, btn, mode="scenario_start_process")
 
     @asyncSlot()
     async def login_account(self, phone10: str, btn: QPushButton) -> None:
         """ Запуск аккаунта в режиме "login"."""
 
-        await self._run_account_with_proxy(phone10, btn, mode="logout-login")
+        await self.run_account_with_proxy(phone10, btn, mode="logout-login")
 
-    def _restore_btn(self, btn: QPushButton) -> None:
-        """
-        Восстанавливает кнопку run в исходное состояние:
-        - текст
-        - enabled
-        - стиль
-        + возвращает доступ к settings/delete
-        """
+    def restore_btn(self, btn: QPushButton) -> None:
+        """Восстанавливает кнопку run в исходное состояние."""
+
         old_text = btn.property("old_text") or "Запуск"
         btn.setText(old_text)
         btn.setDisabled(False)
         btn.setStyleSheet(self.style_run_btn)
 
-        self.set_actions_container_enabled(btn, True)
+        self._set_actions_container_enabled(btn, True)
 
     @asyncSlot()
     async def on_settings_clicked(self, row: int) -> None:
-        """
-        Открывает диалог редактирования аккаунта для выбранной строки.
-        - на время открытия блокирует таблицу
-        - загружает данные аккаунта из БД
-        - если аккаунт не найден — показывает предупреждение
-        """
+        """Открывает диалог редактирования аккаунта для выбранной строки."""
+
         self.table.setDisabled(True)
+        try:
+            phone_item = self.table.item(row, 1)
+            phone10 = phone_item.data(Qt.ItemDataRole.UserRole)
 
-        phone_item = self.table.item(row, 1)
-        if not phone_item:
-            return
+            account_data = await self._get_account_by_phone(phone10)
+            if not account_data:
+                CustomMessageBox.warning(self, "Ошибка", "Аккаунт не найден в БД.")
+                return
 
-        phone10 = phone_item.data(Qt.UserRole)
-        if not phone10:
-            return
-
-        account_data = await self._get_account_by_phone(phone10)
-        if not account_data:
-            msg = QMessageBox(self)
-            msg.setIcon(QMessageBox.Warning)
-            msg.setWindowTitle("Ошибка")
-            msg.setText("Аккаунт не найден в БД.")
-            msg.open()
-            return
-
-        dlg = AddAccountDialog(self, account=account_data)
-        dlg.account_saved.connect(self.load_accounts)
-        dlg.setWindowModality(Qt.ApplicationModal)
-        dlg.open()
-
-        self.table.setDisabled(False)
+            dlg = AddAccountDialog(self, account=account_data)
+            dlg.account_saved.connect(self.load_accounts)
+            dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
+            dlg.open()
+        finally:
+            self.table.setDisabled(False)
 
     async def delete_account_async(self, phone10: str) -> None:
-        """
-        Удаляет аккаунт из БД по phone10 и затем обновляет таблицу.
-        """
-        async with Database().get_session() as session:
-            await session.execute(delete(Account).where(Account.phone == phone10))
-            await session.commit()
+        """Удаляет аккаунт из БД по phone10 и затем обновляет таблицу."""
 
-        await self.load_accounts()
+        try:
+            async with app_core.db.get_session() as session:
+                await AccountRepo.delete_account_by_phone(session, phone10)
+
+        except Exception as e:
+            CustomMessageBox.critical(self, "Ошибка", f"Не удалось удалить аккаунт:\n{e}")
+        finally:
+            await self.load_accounts()
 
     def on_delete_clicked(self, row: int) -> None:
         """
@@ -792,28 +670,27 @@ class MainWindow(QMainWindow):
         if not phone_item:
             return
 
-        phone10 = phone_item.data(Qt.UserRole)
+        phone10 = phone_item.data(Qt.ItemDataRole.UserRole)
         if not phone10:
             return
 
-        reply = QMessageBox.question(
+        reply = CustomMessageBox.question(
             self,
             "Удаление",
             "Удалить выбранный аккаунт? Аккаунт будет удален из "
             "базы данных без возможности восстановления",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            CustomMessageBox.StandardButton.Yes | CustomMessageBox.StandardButton.No,
+            CustomMessageBox.StandardButton.No
         )
 
-        if reply == QMessageBox.Yes:
+        if reply == CustomMessageBox.StandardButton.Yes:
             asyncio.create_task(self.delete_account_async(phone10))
 
     def show_more_settings_menu(self, btn_more: QPushButton, phone10: str, btn_run: QPushButton):
         self._more_menu = QMenu(btn_more)
-        menu = self._more_menu
 
-        act_open_profile = QAction("Авторизовать заново", menu)
-        act_delete_cache = QAction("Удалить с компьютера", menu)
+        act_open_profile = QAction("Авторизовать заново", self._more_menu)
+        act_delete_cache = QAction("Удалить с компьютера", self._more_menu)
 
         def _run_login(_checked=False):
             self.login_account(phone10, btn_run)
@@ -824,11 +701,11 @@ class MainWindow(QMainWindow):
         act_open_profile.triggered.connect(_run_login)
         act_delete_cache.triggered.connect(_delete_cache)
 
-        menu.addAction(act_open_profile)
-        menu.addSeparator()
-        menu.addAction(act_delete_cache)
+        self._more_menu.addAction(act_open_profile)
+        self._more_menu.addSeparator()
+        self._more_menu.addAction(act_delete_cache)
 
-        menu.exec(btn_more.mapToGlobal(btn_more.rect().bottomLeft()))
+        self._more_menu.exec(btn_more.mapToGlobal(btn_more.rect().bottomLeft()))
 
     def _row_checkbox(self, row: int) -> QCheckBox | None:
         """
@@ -838,7 +715,7 @@ class MainWindow(QMainWindow):
         return w.findChild(QCheckBox) if w else None
 
     def on_header_checkbox_clicked(self, state: Qt.CheckState) -> None:
-        checked = (state == Qt.Checked)
+        checked = (state == Qt.CheckState.Checked)
 
         self.table.setUpdatesEnabled(False)
 
@@ -865,14 +742,14 @@ class MainWindow(QMainWindow):
                 widget.setStyleSheet("background-color: rgba(0, 120, 215, 40);" if checked else "")
 
         self.table.setUpdatesEnabled(True)
-        self.header.setState(Qt.Checked if checked else Qt.Unchecked)
+        self.header.setState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
 
     def _show_warning(self, title: str, text: str) -> None:
         """
-        Показывает QMessageBox.warning через QTimer.singleShot,
+        Показывает CustomMessageBox.warning через QTimer.singleShot,
         чтобы не конфликтовать с потоками/циклами Qt/asyncio.
         """
-        QTimer.singleShot(0, lambda: QMessageBox.warning(self, title, text))
+        QTimer.singleShot(0, lambda: CustomMessageBox.warning(self, title, text))
 
     def on_row_checkbox_changed(self, checkbox: QCheckBox) -> None:
         """
@@ -911,11 +788,11 @@ class MainWindow(QMainWindow):
                 checked_count += 1
 
         if checked_count == 0:
-            self.header.setState(Qt.Unchecked)
+            self.header.setState(Qt.CheckState.Unchecked)
         elif checked_count == total:
-            self.header.setState(Qt.Checked)
+            self.header.setState(Qt.CheckState.Checked)
         else:
-            self.header.setState(Qt.PartiallyChecked)
+            self.header.setState(Qt.CheckState.PartiallyChecked)
 
     def on_table_item_changed(self, item: QTableWidgetItem) -> None:
         """
@@ -936,7 +813,7 @@ class MainWindow(QMainWindow):
         if not phone_item:
             return
 
-        phone10 = phone_item.data(Qt.UserRole)
+        phone10 = phone_item.data(Qt.ItemDataRole.UserRole)
         if not phone10:
             return
 
@@ -955,6 +832,7 @@ class MainWindow(QMainWindow):
         1) по статусам (чекбоксы disable/login/logout)
         2) по тексту поиска (в телефоне и комментарии)
         """
+
         # --- 1) статусы, которые разрешены ---
         allowed = set()
         if self.cb_disable.isChecked():
@@ -995,17 +873,10 @@ class MainWindow(QMainWindow):
             # итог: показываем только если оба условия true
             self.table.setRowHidden(row, not (status_ok and search_ok))
 
-    def filter_table(self, text: str) -> None:
-        """
-        Совместимость/старый вызов: просто применяет фильтры.
-        """
-        self.apply_filters()
+    @staticmethod
+    def _set_actions_container_enabled(run_btn: QPushButton, enabled: bool) -> None:
+        """Включает/выключает кнопки settings/delete в той же ячейке, где run_btn."""
 
-    def set_actions_container_enabled(self, run_btn: QPushButton, enabled: bool) -> None:
-        """
-        Включает/выключает кнопки settings/delete в той же ячейке, где run_btn.
-        Сам run_btn не трогаем — он управляется отдельно.
-        """
         container = run_btn.parentWidget()
         if not container:
             return
@@ -1016,108 +887,60 @@ class MainWindow(QMainWindow):
             b.setEnabled(enabled)
 
     @staticmethod
-    def _format_phone_ru(phone10: str) -> str:
-        """
-        Форматирует 10 цифр в вид +7 XXX-XXX-XX-XX.
-        Если цифр не 10 — возвращает как есть.
-        """
-        digits = ''.join(filter(str.isdigit, phone10))
-        if len(digits) != 10:
-            return phone10
-        return f"+7 {digits[0:3]}-{digits[3:6]}-{digits[6:8]}-{digits[8:10]}"
+    async def _save_comment_async(phone10: str, comment: str) -> None:
+        """Сохраняет комментарий аккаунта в БД по phone10."""
+
+        async with app_core.db.get_session() as session:
+            await AccountRepo.set_comment(session, phone10, comment)
 
     @staticmethod
-    async def _save_comment_async(phone10: str, comment: str) -> None:
-        """
-        Сохраняет комментарий аккаунта в БД по phone10.
-        """
-        async with Database().get_session() as session:
-            await session.execute(
-                update(Account).where(Account.phone == phone10).values(comment=comment)
-            )
-            await session.commit()
-
-    async def _get_account_by_phone(self, phone10: str) -> dict | None:
+    async def _get_account_by_phone(phone10: str) -> dict | None:
         """
         Берёт данные аккаунта из БД по phone10.
         Возвращает dict для удобной передачи в диалог/логику.
         """
-        async with Database().get_session() as session:
-            res = await session.execute(
-                select(
-                    Account.phone,
-                    Account.name,
-                    Account.male,
-                    Account.user_agent,
-                    Account.comment
-                ).where(Account.phone == phone10)
-            )
-            row = res.first()
 
-            if not row:
-                return None
-
-            phone, name, male, user_agent, comment = row
-
-            return {
-                "phone10": phone,
-                "phone_view": self._format_phone_ru(phone),
-                "name": name or "",
-                "gender": male or None,
-                "user_agent": user_agent or "",
-                "comment": comment or "",
-            }
-
-    def _rm_readonly(self, func, path, _excinfo):
-        try:
-            os.chmod(path, 0o777)
-        except Exception:
-            pass
-        try:
-            func(path)
-        except Exception:
-            pass
-
-    async def _delete_users_account_row(self, phone10: str, user_login: str) -> None:
         async with app_core.db.get_session() as session:
-            await session.execute(
-                delete(UsersAccounts).where(
-                    UsersAccounts.phone == phone10,
-                    UsersAccounts.user == user_login
-                )
-            )
-            await session.commit()
+            data = await AccountRepo.get_account_dict(session, phone10)
+
+        if not data:
+            return None
+
+        data["phone_view"] = format_phone_ru(data["phone10"])
+        return data
+
+    @staticmethod
+    def _rm_readonly(func: Callable[[str], None],
+                     path: str,
+                     exc_info: tuple[Type[BaseException], BaseException, TracebackType]) -> None:
+        """
+        Обработчик ошибок для shutil.rmtree.
+        Снимает read-only флаг и повторяет удаление файла/директории.
+        """
+
+        try:
+            os.chmod(path, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
+            func(path)
+        except OSError:
+            pass
 
     def delete_account_cache(self, phone10: str) -> None:
         phone10 = str(phone10).strip()
         user_login = self.user.login
-        profile_path = Path(os.getcwd()) / "profiles" / phone10
+        profile_path = PROFILE_DIR / phone10
 
         async def _do():
-            # 1) удалить строку из users_accounts
-            await self._delete_users_account_row(phone10, user_login)
+            async with app_core.db.get_session() as session:
+                await UsersAccountsRepo.delete_link(session, phone10, user_login)
+                await AccountRepo.set_status(session, phone10, "logout")
 
-            # 2) поставить статус logout
-            await self._set_account_status_logout(phone10)
-
-            # 3) удалить папку профиля
+            # удалить папку профиля
             def _rm_folder():
                 if profile_path.exists():
                     shutil.rmtree(profile_path, onerror=self._rm_readonly)
 
             await asyncio.to_thread(_rm_folder)
 
-            # 4) обновить таблицу
             await self.load_accounts()
 
         asyncio.create_task(_do())
-
-    async def _set_account_status_logout(self, phone10: str) -> None:
-        async with app_core.db.get_session() as session:
-            await session.execute(
-                update(Account)
-                .where(Account.phone == phone10)
-                .values(status="logout")
-            )
-            await session.commit()
-

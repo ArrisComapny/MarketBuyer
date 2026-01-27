@@ -1,3 +1,5 @@
+shiboken6
+aiohttp
 # pip install -r requirements.txt
 
 PySide6~=6.10.0

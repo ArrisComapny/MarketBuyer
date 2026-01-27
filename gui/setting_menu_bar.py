@@ -1,20 +1,25 @@
 import re
 import asyncio
 
-from sqlalchemy import select
 from PySide6.QtGui import QIcon
 from PySide6.QtCore import QSize
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QFormLayout
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QPushButton, QWidget, QHeaderView
 from PySide6.QtWidgets import QAbstractItemView, QLineEdit, QComboBox, QMessageBox, QSizePolicy
 
-from database.db import Database
+import core.app as app_core
+
 from database.models import Proxy
+from utils.proxy import proxy_title
+from database.repositories import ProxyRepo
 
 
 class ProxyEditDialog(QDialog):
     def __init__(self, proxy: Proxy | None = None, parent=None) -> None:
+        """Диалог добавления или редактирования прокси."""
+
         super().__init__(parent)
+
         self.proxy = proxy
         self.setWindowTitle("Добавить прокси" if proxy is None else "Редактировать прокси")
         self.setMinimumWidth(420)
@@ -27,7 +32,7 @@ class ProxyEditDialog(QDialog):
         self.password_edit = QLineEdit(proxy.password if proxy else "")
 
         self.scheme_combo = QComboBox()
-        self.scheme_combo.addItems(["http","https","socks5"])
+        self.scheme_combo.addItems(["http", "https", "socks5"])
         if proxy:
             self.scheme_combo.setCurrentText(proxy.proxy_scheme)
 
@@ -46,8 +51,8 @@ class ProxyEditDialog(QDialog):
         btn_save.clicked.connect(self.on_save_clicked)
         btn_cancel.clicked.connect(self.reject)
 
-        btn_save.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        btn_cancel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        btn_save.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        btn_cancel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         btn_save.setMinimumHeight(36)
         btn_cancel.setMinimumHeight(36)
@@ -61,13 +66,13 @@ class ProxyEditDialog(QDialog):
         self.adjustSize()
 
     def on_save_clicked(self) -> None:
+        """Валидирует введённые данные прокси и закрывает диалог с Accept при успешной проверке."""
+
         host = self.host_edit.text().strip()
         port = self.port_edit.text().strip()
         login = self.login_edit.text().strip()
         password = self.password_edit.text().strip()
         change_url = self.change_ip_edit.text().strip()
-
-
 
         if not host:
             QMessageBox.warning(self, "Ошибка", "Host обязателен.")
@@ -81,9 +86,11 @@ class ProxyEditDialog(QDialog):
         )
 
         if not re.fullmatch(ip_regex, host):
-            QMessageBox.warning(self,
-                                "Ошибка",
-                                "Host должен быть корректным IPv4-адресом (например 192.168.1.1).")
+            QMessageBox.warning(
+                self,
+                "Ошибка",
+                "Host должен быть корректным IPv4-адресом (например 192.168.1.1)."
+            )
             self.host_edit.setFocus()
             return
 
@@ -91,34 +98,18 @@ class ProxyEditDialog(QDialog):
             QMessageBox.warning(self, "Ошибка", "Port обязателен.")
             self.port_edit.setFocus()
             return
-        elif not port.isdigit():
-            QMessageBox.warning(self,
-                                "Ошибка",
-                                "Port должен быть в числовом формате "
-                                "в диапазоне от 0 до 65535.")
-            self.port_edit.setFocus()
-            return
-
-        port_value = int(port)
-
-        if not (0 <= port_value <= 65535):
-            QMessageBox.warning(self,
-                                "Ошибка",
-                                "Port должен быть в диапазоне от 0 до 65535.")
+        elif not port.isdigit() or not (1 <= int(port) <= 65535):
+            QMessageBox.warning( self, "Ошибка", "Port должен быть в диапазоне от 0 до 65535.")
             self.port_edit.setFocus()
             return
 
         if not login:
-            QMessageBox.warning(self,
-                                "Ошибка",
-                                "Login обязателен.")
+            QMessageBox.warning(self, "Ошибка", "Login обязателен.")
             self.login_edit.setFocus()
             return
 
         if not password:
-            QMessageBox.warning(self,
-                                "Ошибка",
-                                "Password обязателен.")
+            QMessageBox.warning(self, "Ошибка", "Password обязателен.")
             self.password_edit.setFocus()
             return
 
@@ -129,15 +120,11 @@ class ProxyEditDialog(QDialog):
             return
 
         if not change_url:
-            QMessageBox.warning(self,
-                                "Ошибка",
-                                "Change IP URL обязателен.")
+            QMessageBox.warning(self, "Ошибка", "Change IP URL обязателен.")
             self.change_ip_edit.setFocus()
             return
         elif not change_url.startswith("http"):
-            QMessageBox.warning(self,
-                                "Ошибка",
-                                "Change IP URL должен начинаться с http")
+            QMessageBox.warning(self, "Ошибка", "Change IP URL должен начинаться с http")
             self.change_ip_edit.setFocus()
             return
 
@@ -146,7 +133,10 @@ class ProxyEditDialog(QDialog):
 
 class ProxyManagerDialog(QDialog):
     def __init__(self, parent=None) -> None:
+        """Окно управления списком прокси."""
+
         super().__init__(parent)
+
         self.setWindowTitle("Proxy Manager")
         self.resize(720, 420)
 
@@ -155,10 +145,10 @@ class ProxyManagerDialog(QDialog):
         self.table = QTableWidget(0, 2, self)
         self.table.setHorizontalHeaderLabels(["Прокси", "Действия"])
         self.table.verticalHeader().setVisible(False)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Fixed)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         self.table.setColumnWidth(1, 120)
 
         main_layout.addWidget(self.table)
@@ -174,21 +164,21 @@ class ProxyManagerDialog(QDialog):
 
         asyncio.create_task(self.load_proxies())
 
-    @staticmethod
-    def _proxy_title(p: Proxy) -> str:
-        return f"{p.proxy_scheme}://{p.host}:{p.port}"
-
     async def load_proxies(self) -> None:
-        async with Database().get_session() as session:
-            res = await session.execute(select(Proxy).order_by(Proxy.id.desc()))
-            proxies = res.scalars().all()
+        """Загружает список прокси из базы данных и обновляет таблицу."""
+        try:
+            async with app_core.db.get_session() as session:
+                proxies = await ProxyRepo.get_proxies(session)
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить прокси:\n{e}")
+            return
 
         self.table.setRowCount(0)
 
         for row, proxy in enumerate(proxies):
             self.table.insertRow(row)
 
-            self.table.setItem(row, 0, QTableWidgetItem(self._proxy_title(proxy)))
+            self.table.setItem(row, 0, QTableWidgetItem(proxy_title(proxy)))
 
             style_btn = """
             QPushButton {
@@ -206,12 +196,12 @@ class ProxyManagerDialog(QDialog):
             btn_edit.setIconSize(QSize(20, 20))
             btn_edit.setFixedSize(35, 25)
             btn_edit.setStyleSheet(style_btn)
+
             btn_delete = QPushButton()
             btn_delete.setIcon(QIcon("templates/icons/delete.png"))
             btn_delete.setIconSize(QSize(20, 20))
             btn_delete.setFixedSize(35, 25)
             btn_delete.setStyleSheet(style_btn)
-
 
             btn_edit.clicked.connect(lambda _, pid=proxy.id: self.open_edit_dialog(pid))
             btn_delete.clicked.connect(lambda _, pid=proxy.id: self.ask_delete(pid))
@@ -226,12 +216,18 @@ class ProxyManagerDialog(QDialog):
             self.table.setCellWidget(row, 1, box)
 
     def open_edit_dialog(self, proxy_id: int) -> None:
+        """Открывает диалог редактирования прокси по его ID."""
+
         self.table.setDisabled(True)
         asyncio.create_task(self.open_edit_async(proxy_id))
 
     async def open_edit_async(self, proxy_id: int) -> None:
-        async with Database().get_session() as session:
-            proxy = await session.get(Proxy, proxy_id)
+        """
+        Асинхронно загружает прокси из базы, отображает диалог редактирования
+        и сохраняет изменения при подтверждении.
+        """
+        async with app_core.db.get_session() as session:
+            proxy = await ProxyRepo.get_proxy_by_id(session, proxy_id)
 
         if not proxy:
             QMessageBox.warning(self, "Не найдено", "Прокси не найден в базе.")
@@ -239,17 +235,12 @@ class ProxyManagerDialog(QDialog):
             return
 
         dlg = ProxyEditDialog(proxy, self)
-        if dlg.exec() != QDialog.Accepted:
+        if dlg.exec() != QDialog.DialogCode.Accepted:
             self.table.setDisabled(False)
             return
 
-        if not dlg.host_edit.text().strip() or not dlg.port_edit.text().strip():
-            QMessageBox.warning(self, "Ошибка", "Host и Port обязательны.")
-            self.table.setDisabled(False)
-            return
-
-        async with Database().get_session() as session:
-            db_proxy = await session.get(Proxy, proxy_id)
+        async with app_core.db.get_session() as session:
+            db_proxy = await ProxyRepo.get_proxy_by_id(session, proxy_id)
             if not db_proxy:
                 QMessageBox.warning(self, "Не найдено", "Прокси не найден в базе.")
                 self.table.setDisabled(False)
@@ -274,51 +265,61 @@ class ProxyManagerDialog(QDialog):
         self.table.setDisabled(False)
 
     def ask_delete(self, proxy_id: int) -> None:
+        """Запрашивает подтверждение удаления прокси у пользователя."""
+
         btn = QMessageBox.question(self,
                                    "Удалить прокси?",
                                    "Точно удалить этот прокси?",
-                                   QMessageBox.Yes | QMessageBox.No,
-                                   QMessageBox.No)
-        if btn == QMessageBox.Yes:
+                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                   QMessageBox.StandardButton.No)
+        if btn == QMessageBox.StandardButton.Yes:
             asyncio.create_task(self.delete_async(proxy_id))
 
     async def delete_async(self, proxy_id: int) -> None:
-        async with Database().get_session() as session:
-            proxy = await session.get(Proxy, proxy_id)
-            if not proxy:
-                return
+        """Асинхронно удаляет прокси из базы данных по ID и обновляет список прокси."""
 
-            await session.delete(proxy)
+        try:
+            async with app_core.db.get_session() as session:
+                ok = await ProxyRepo.delete_proxy_by_id(session, proxy_id)
 
-            try:
-                await session.commit()
-            except Exception as e:
-                await session.rollback()
-                QMessageBox.critical(self, "Ошибка удаления", f"Не удалось удалить:\n{e}")
-                return
+            if not ok:
+                QMessageBox.information(self, "Удаление", "Прокси не найден.")
 
-        await self.load_proxies()
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка удаления", f"Не удалось удалить:\n{e}")
+        finally:
+            await self.load_proxies()
 
     def on_add_proxy(self) -> None:
+        """Открывает диалог добавления нового прокси."""
+
         dlg = ProxyEditDialog(None, self)
-        if dlg.exec() == QDialog.Accepted:
+        if dlg.exec() == QDialog.DialogCode.Accepted:
             asyncio.create_task(self._add_proxy_async(dlg))
 
-    async def _add_proxy_async(self, dlg: ProxyEditDialog):
-        new_proxy = Proxy(host=dlg.host_edit.text().strip(),
-                          port=dlg.port_edit.text().strip(),
-                          login=dlg.login_edit.text().strip(),
-                          password=dlg.password_edit.text().strip(),
-                          proxy_scheme=dlg.scheme_combo.currentText(),
-                          change_ip_url=dlg.change_ip_edit.text().strip())
+    async def _add_proxy_async(self, dlg: ProxyEditDialog) -> None:
+        """Асинхронно сохраняет новый прокси в базу данных и обновляет список прокси."""
 
-        async with Database().get_session() as session:
-            session.add(new_proxy)
-            try:
-                await session.commit()
-            except Exception as e:
-                await session.rollback()
-                QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить прокси:\n{e}")
-                return
+        host = dlg.host_edit.text().strip()
+        port = dlg.port_edit.text().strip()
+        login = dlg.login_edit.text().strip()
+        password = dlg.password_edit.text().strip()
+        scheme = dlg.scheme_combo.currentText()
+        change_ip_url = dlg.change_ip_edit.text().strip()
 
-        await self.load_proxies()
+        try:
+            async with app_core.db.get_session() as session:
+                await ProxyRepo.add_proxy(
+                    session,
+                    host=host,
+                    port=port,
+                    login=login,
+                    password=password,
+                    proxy_scheme=scheme,
+                    change_ip_url=change_ip_url,
+                )
+
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить прокси:\n{e}")
+        finally:
+            await self.load_proxies()

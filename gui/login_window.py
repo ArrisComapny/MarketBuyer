@@ -1,21 +1,22 @@
 import os
 import base64
+import binascii
 
 from qasync import asyncSlot
-from sqlalchemy import select
 from PySide6.QtGui import QIcon
-from utils.messagebox import CustomMessageBox
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton, QHBoxLayout, QCheckBox, QApplication
 
 import core.app as app_core
 
-from database.models import User
+from database.repositories import UserRepo
+from utils.messagebox import CustomMessageBox
 from core.settings import save_settings, load_settings
 
 
 class LoginWindow(QWidget):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
+
         self.main = None
         self.width = 300
         self.height = 130
@@ -27,38 +28,38 @@ class LoginWindow(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 10, 15, 10)
 
+        # --- Логин ---
         login_row = QHBoxLayout()
-
-        self.login = QLineEdit()
-        self.login.returnPressed.connect(self.try_login)
-        self.login.setPlaceholderText("Введите логин...")
-
         login_label = QLabel("Логин")
         login_label.setFixedWidth(50)
+
+        self.login = QLineEdit()
+        self.login.setPlaceholderText("Введите логин...")
+        self.login.returnPressed.connect(self.try_login)
 
         login_row.addWidget(login_label)
         login_row.addWidget(self.login)
 
+        # --- Пароль ---
         password_row = QHBoxLayout()
-
-        self.password = QLineEdit()
-        self.password.returnPressed.connect(self.try_login)
-        self.password.setPlaceholderText("Введите пароль...")
-        self.password.setEchoMode(QLineEdit.Password)
-
         password_label = QLabel("Пароль")
         password_label.setFixedWidth(50)
+
+        self.password = QLineEdit()
+        self.password.setPlaceholderText("Введите пароль...")
+        self.password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password.returnPressed.connect(self.try_login)
 
         password_row.addWidget(password_label)
         password_row.addWidget(self.password)
 
+        # --- Запомнить ---
         self.remember_cb = QCheckBox("Запомнить")
         self.remember_cb.setStyleSheet("""
-            QCheckBox {
-                spacing: 14px;
-            }
+            QCheckBox { spacing: 14px; }
         """)
 
+        # --- Кнопка ---
         self.btn = QPushButton("Войти")
         self.btn.clicked.connect(self.try_login)
         self.btn.setStyleSheet("""
@@ -76,60 +77,66 @@ class LoginWindow(QWidget):
         self._load_saved_credentials()
         self.center_on_screen()
 
-    def _load_saved_credentials(self):
-        """Загрузить сохранённый логин/пароль, если включено 'Запомнить'."""
-        self.settings = load_settings()
+    def _load_saved_credentials(self) -> None:
+        """Подставляет сохранённые логин/пароль, если включено 'Запомнить'."""
 
-        saved_login = self.settings.get("login")
-        saved_password = self.settings.get("password")
-        remember = self.settings.get("remember", False)
+        settings = load_settings()
+        remember = bool(settings.get("remember", False))
 
         if remember:
+            saved_login = settings.get("login", "")
+            saved_password = settings.get("password", "")
+
             if saved_login:
                 self.login.setText(saved_login)
 
             if saved_password:
-                try:
-                    decoded_pass = base64.b64decode(saved_password).decode()
-                    self.password.setText(decoded_pass)
-                except Exception:
-                    pass
+                decoded = self._try_decode_password(saved_password)
+                if decoded is not None:
+                    self.password.setText(decoded)
 
             self.remember_cb.setChecked(True)
 
         self.login.setFocus()
         self.login.setCursorPosition(len(self.login.text()))
 
-    def center_on_screen(self):
+    @staticmethod
+    def _try_decode_password(encoded_password: str) -> str | None:
+        """
+        Декодирует base64-пароль.
+        Возвращает строку или None, если значение повреждено.
+        """
+        try:
+            return base64.b64decode(encoded_password).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError):
+            return None
+
+    def center_on_screen(self) -> None:
         """Переместить окно в центр экрана."""
         screen = QApplication.primaryScreen()
         if not screen:
             return
+
         screen_geom = screen.availableGeometry()
         x = screen_geom.x() + (screen_geom.width() - self.width) // 2
         y = screen_geom.y() + (screen_geom.height() - self.height) // 2
         self.move(x, y)
 
-    def set_loading(self, loading: bool, message: str = "Войти"):
+    def set_loading(self, loading: bool, message: str = "Войти") -> None:
         """Включает/выключает режим загрузки."""
-        if loading:
-            self.btn.setText(message)
-            self.btn.setEnabled(False)
-            self.login.setEnabled(False)
-            self.password.setEnabled(False)
-            self.remember_cb.setEnabled(False)
-        else:
-            self.btn.setText(message)
-            self.btn.setEnabled(True)
-            self.login.setEnabled(True)
-            self.password.setEnabled(True)
-            self.remember_cb.setEnabled(True)
+        self.btn.setText(message)
+        self.btn.setEnabled(not loading)
+        self.login.setEnabled(not loading)
+        self.password.setEnabled(not loading)
+        self.remember_cb.setEnabled(not loading)
+
+        if not loading:
             self.login.setFocus()
 
-
-
     @asyncSlot()
-    async def try_login(self):
+    async def try_login(self) -> None:
+        """Проверяет логин/пароль в БД и при успехе открывает главное окно."""
+
         if app_core.db is None:
             CustomMessageBox.warning(self, "База данных", "База данных ещё не готова.")
             return
@@ -146,12 +153,8 @@ class LoginWindow(QWidget):
 
         self.set_loading(True, "Проверка пользователя...")
 
-        user = None
-
         async with app_core.db.get_session() as session:
-            stmt = select(User).where(User.login == login, User.password == password, User.status == True)
-            res = await session.execute(stmt)
-            user = res.scalar_one_or_none()
+            user = await UserRepo.get_active_user(session, login, password)
 
         self.set_loading(False)
 
@@ -159,22 +162,18 @@ class LoginWindow(QWidget):
             CustomMessageBox.warning(self, "Ошибка", "Неверный логин или пароль")
             return
 
-        if self.remember_cb.isChecked():
-            encoded_pass = base64.b64encode(password.encode()).decode()
-
-            save_settings({
-                "login": login,
-                "password": encoded_pass,
-                "remember": True,
-            })
-        else:
-            save_settings({
-                "login": "",
-                "password": "",
-                "remember": False,
-            })
+        self._save_remember(login, password)
 
         from gui.main_window import MainWindow
         self.hide()
         self.main = MainWindow(user)
         self.main.show()
+
+    def _save_remember(self, login: str, password: str) -> None:
+        """Сохраняет/очищает учётные данные в зависимости от галочки 'Запомнить'."""
+
+        if self.remember_cb.isChecked():
+            encoded_pass = base64.b64encode(password.encode("utf-8")).decode("ascii")
+            save_settings({"login": login, "password": encoded_pass, "remember": True})
+        else:
+            save_settings({"login": "", "password": "", "remember": False})
