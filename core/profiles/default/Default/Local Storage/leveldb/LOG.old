@@ -1,0 +1,8 @@
+2026/01/13-15:41:06.501 36e8 Reusing MANIFEST C:\Users\Witcherald\PycharmProjects\MarketBuyer\core\profiles\default\Default\Local Storage\leveldb/MANIFEST-000001
+2026/01/13-15:41:06.504 36e8 Recovering log #4
+2026/01/13-15:41:06.505 36e8 Level-0 table #6: started
+2026/01/13-15:41:06.509 36e8 Level-0 table #6: 247131 bytes OK
+2026/01/13-15:41:06.511 36e8 Delete type=0 #4
+2026/01/13-15:41:29.802 1dc0 Level-0 table #9: started
+2026/01/13-15:41:29.809 1dc0 Level-0 table #9: 233335 bytes OK
+2026/01/13-15:41:29.811 1dc0 Delete type=0 #7
