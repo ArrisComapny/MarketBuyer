@@ -94,7 +94,6 @@ class AddAccountDialog(QDialog):
                                 gender: str | None,
                                 user_agent: str) -> tuple[str, str, str]:
         """Нормализует поля аккаунта."""
-
         if not name and not gender:
             name, gender = await pick_name_gender(session)
 
@@ -111,7 +110,6 @@ class AddAccountDialog(QDialog):
 
     def on_save_clicked(self) -> None:
         """Обрабатывает нажатие кнопки «Сохранить»."""
-
         name = self.name_edit.text().strip()
         user_agent = self.ua_edit.text().strip()
         gender = self.gender_combo.currentData()
@@ -152,7 +150,6 @@ class AddAccountDialog(QDialog):
 
     def fill_from_account(self) -> None:
         """Заполняет поля формы данными существующего аккаунта при открытии диалога в режиме редактирования."""
-
         self.name_edit.setText(self.account.get("name", ""))
         self.ua_edit.setText(self.account.get("user_agent", ""))
         self.comment_edit.setText(self.account.get("comment", ""))
@@ -167,7 +164,6 @@ class AddAccountDialog(QDialog):
 
     async def save_account(self, name: str, gender: str | None, phone10: str, user_agent: str, comment: str) -> None:
         """Асинхронно создаёт новый аккаунт в базе данных."""
-
         self.btn_save.setEnabled(False)
 
         try:
@@ -179,7 +175,7 @@ class AddAccountDialog(QDialog):
                     user_agent=user_agent,
                 )
 
-                await AccountRepo.create(
+                await AccountRepo.add_account(
                     session,
                     phone10=phone10,
                     name=name,
@@ -202,7 +198,6 @@ class AddAccountDialog(QDialog):
 
     async def update_account(self, name: str, gender: str | None, phone10: str, user_agent: str, comment: str) -> None:
         """Асинхронно обновляет существующий аккаунт в базе данных."""
-
         self.btn_save.setEnabled(False)
 
         try:

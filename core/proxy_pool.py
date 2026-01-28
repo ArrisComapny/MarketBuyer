@@ -89,11 +89,3 @@ class ProxyPool:
                 continue
 
         return None, f"Не удалось выдать прокси. Последняя ошибка: {last_err}"
-
-
-
-
-
-
-
-

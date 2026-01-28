@@ -1,8 +1,6 @@
 import json
-import os
-from pathlib import Path
 
-CONFIG_PATH = Path(os.path.join(os.getcwd(), "templates\config.json"))
+from config import CONFIG_PATH
 
 
 def load_settings():

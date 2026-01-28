@@ -1,7 +1,6 @@
 import re
 import asyncio
 
-from PySide6.QtGui import QIcon
 from PySide6.QtCore import QSize
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QFormLayout
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QPushButton, QWidget, QHeaderView
@@ -10,6 +9,7 @@ from PySide6.QtWidgets import QAbstractItemView, QLineEdit, QComboBox, QMessageB
 import core.app as app_core
 
 from database.models import Proxy
+from gui.style import AppStyle
 from utils.proxy import proxy_title
 from database.repositories import ProxyRepo
 
@@ -17,7 +17,6 @@ from database.repositories import ProxyRepo
 class ProxyEditDialog(QDialog):
     def __init__(self, proxy: Proxy | None = None, parent=None) -> None:
         """Диалог добавления или редактирования прокси."""
-
         super().__init__(parent)
 
         self.proxy = proxy
@@ -67,7 +66,6 @@ class ProxyEditDialog(QDialog):
 
     def on_save_clicked(self) -> None:
         """Валидирует введённые данные прокси и закрывает диалог с Accept при успешной проверке."""
-
         host = self.host_edit.text().strip()
         port = self.port_edit.text().strip()
         login = self.login_edit.text().strip()
@@ -134,7 +132,6 @@ class ProxyEditDialog(QDialog):
 class ProxyManagerDialog(QDialog):
     def __init__(self, parent=None) -> None:
         """Окно управления списком прокси."""
-
         super().__init__(parent)
 
         self.setWindowTitle("Proxy Manager")
@@ -180,28 +177,17 @@ class ProxyManagerDialog(QDialog):
 
             self.table.setItem(row, 0, QTableWidgetItem(proxy_title(proxy)))
 
-            style_btn = """
-            QPushButton {
-                border: none; 
-                background-color: transparent; 
-            }
-            QPushButton:hover {
-                background-color: rgba(0, 120, 215, 40);
-                border-radius: 4px;
-            }
-            """
-
             btn_edit = QPushButton()
-            btn_edit.setIcon(QIcon("templates/icons/setting.png"))
+            btn_edit.setIcon(AppStyle.icon("setting"))
             btn_edit.setIconSize(QSize(20, 20))
             btn_edit.setFixedSize(35, 25)
-            btn_edit.setStyleSheet(style_btn)
+            btn_edit.setStyleSheet(AppStyle.qss_icon_btn())
 
             btn_delete = QPushButton()
-            btn_delete.setIcon(QIcon("templates/icons/delete.png"))
+            btn_delete.setIcon(AppStyle.icon("delete"))
             btn_delete.setIconSize(QSize(20, 20))
             btn_delete.setFixedSize(35, 25)
-            btn_delete.setStyleSheet(style_btn)
+            btn_delete.setStyleSheet(AppStyle.qss_icon_btn())
 
             btn_edit.clicked.connect(lambda _, pid=proxy.id: self.open_edit_dialog(pid))
             btn_delete.clicked.connect(lambda _, pid=proxy.id: self.ask_delete(pid))
@@ -217,7 +203,6 @@ class ProxyManagerDialog(QDialog):
 
     def open_edit_dialog(self, proxy_id: int) -> None:
         """Открывает диалог редактирования прокси по его ID."""
-
         self.table.setDisabled(True)
         asyncio.create_task(self.open_edit_async(proxy_id))
 
@@ -266,7 +251,6 @@ class ProxyManagerDialog(QDialog):
 
     def ask_delete(self, proxy_id: int) -> None:
         """Запрашивает подтверждение удаления прокси у пользователя."""
-
         btn = QMessageBox.question(self,
                                    "Удалить прокси?",
                                    "Точно удалить этот прокси?",
@@ -277,7 +261,6 @@ class ProxyManagerDialog(QDialog):
 
     async def delete_async(self, proxy_id: int) -> None:
         """Асинхронно удаляет прокси из базы данных по ID и обновляет список прокси."""
-
         try:
             async with app_core.db.get_session() as session:
                 ok = await ProxyRepo.delete_proxy_by_id(session, proxy_id)
@@ -292,14 +275,12 @@ class ProxyManagerDialog(QDialog):
 
     def on_add_proxy(self) -> None:
         """Открывает диалог добавления нового прокси."""
-
         dlg = ProxyEditDialog(None, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             asyncio.create_task(self._add_proxy_async(dlg))
 
     async def _add_proxy_async(self, dlg: ProxyEditDialog) -> None:
         """Асинхронно сохраняет новый прокси в базу данных и обновляет список прокси."""
-
         host = dlg.host_edit.text().strip()
         port = dlg.port_edit.text().strip()
         login = dlg.login_edit.text().strip()

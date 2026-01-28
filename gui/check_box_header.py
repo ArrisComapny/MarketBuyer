@@ -5,10 +5,9 @@ from PySide6.QtWidgets import QStyleOptionButton, QStyle, QWidget, QHeaderView
 
 class CheckBoxHeader(QHeaderView):
     """
-    Заголовок таблицы с чекбоксом в первой колонке (Select All).
+    Заголовок таблицы с checkbox в первой колонке (Select All).
     Позволяет выделять/снимать выделение со всех строк одним кликом.
     """
-
     clicked = Signal(Qt.CheckState)
 
     CHECK_COLUMN = 0
@@ -22,11 +21,7 @@ class CheckBoxHeader(QHeaderView):
         self.setSectionsClickable(True)
 
     def paintSection(self, painter: QPainter, rect: QRect, logical_index: int) -> None:
-        """
-        Рисует стандартный заголовок и добавляет чекбокс
-        в первой колонке (logical_index == CHECK_COLUMN).
-        """
-
+        """Рисует стандартный заголовок и добавляет checkbox в первой колонке (logical_index == CHECK_COLUMN)."""
         super().paintSection(painter, rect, logical_index)
 
         if logical_index != self.CHECK_COLUMN:
@@ -37,10 +32,9 @@ class CheckBoxHeader(QHeaderView):
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """
-        Если клик попал в чекбокс — переключает состояние и эмитит сигнал.
+        Если клик попал в checkbox — переключает состояние и emit сигнал.
         В противном случае — стандартное поведение заголовка.
         """
-
         if self._checkbox_rect.contains(event.pos()):
             self._toggle_state()
             self.clicked.emit(self._state)
@@ -50,10 +44,9 @@ class CheckBoxHeader(QHeaderView):
 
     def setState(self, state: Qt.CheckState) -> None:
         """
-        Принудительно устанавливает состояние чекбокса в заголовке.
+        Принудительно устанавливает состояние checkbox в заголовке.
         Используется для Unchecked / PartiallyChecked / Checked.
         """
-
         if self._state == state:
             return
 
@@ -62,7 +55,6 @@ class CheckBoxHeader(QHeaderView):
 
     def _toggle_state(self) -> None:
         """Переключает состояние чекбокса Checked / Unchecked."""
-
         self._state = (
             Qt.CheckState.Unchecked
             if self._state == Qt.CheckState.Checked
@@ -71,7 +63,6 @@ class CheckBoxHeader(QHeaderView):
 
     def _create_checkbox_option(self, section_rect: QRect) -> QStyleOptionButton:
         """Создаёт и настраивает QStyleOptionButton для чекбокса."""
-
         option = QStyleOptionButton()
         option.state = QStyle.StateFlag.State_Enabled
 

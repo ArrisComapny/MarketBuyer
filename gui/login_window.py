@@ -1,14 +1,13 @@
-import os
 import base64
 import binascii
 
 from qasync import asyncSlot
-from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton, QHBoxLayout, QCheckBox, QApplication
 
 import core.app as app_core
 
 from database.repositories import UserRepo
+from gui.style import AppStyle
 from utils.messagebox import CustomMessageBox
 from core.settings import save_settings, load_settings
 
@@ -22,7 +21,7 @@ class LoginWindow(QWidget):
         self.height = 130
 
         self.setWindowTitle("Авторизация")
-        self.setWindowIcon(QIcon(os.path.join(os.getcwd(), "templates/icons/login.png")))
+        self.setWindowIcon(AppStyle.icon("login"))
         self.setFixedSize(self.width, self.height)
 
         layout = QVBoxLayout(self)
@@ -55,19 +54,12 @@ class LoginWindow(QWidget):
 
         # --- Запомнить ---
         self.remember_cb = QCheckBox("Запомнить")
-        self.remember_cb.setStyleSheet("""
-            QCheckBox { spacing: 14px; }
-        """)
+        self.remember_cb.setStyleSheet(AppStyle.qss_checkbox_spacing())
 
         # --- Кнопка ---
         self.btn = QPushButton("Войти")
         self.btn.clicked.connect(self.try_login)
-        self.btn.setStyleSheet("""
-            QPushButton:disabled {
-                background-color: #2d2d2d;
-                color: #888888;
-            }
-        """)
+        self.btn.setStyleSheet(AppStyle.qss_btn_disabled_dark())
 
         layout.addLayout(login_row)
         layout.addLayout(password_row)
@@ -79,7 +71,6 @@ class LoginWindow(QWidget):
 
     def _load_saved_credentials(self) -> None:
         """Подставляет сохранённые логин/пароль, если включено 'Запомнить'."""
-
         settings = load_settings()
         remember = bool(settings.get("remember", False))
 
@@ -102,10 +93,7 @@ class LoginWindow(QWidget):
 
     @staticmethod
     def _try_decode_password(encoded_password: str) -> str | None:
-        """
-        Декодирует base64-пароль.
-        Возвращает строку или None, если значение повреждено.
-        """
+        """Декодирует base64-пароль. Возвращает строку или None, если значение повреждено."""
         try:
             return base64.b64decode(encoded_password).decode("utf-8")
         except (binascii.Error, UnicodeDecodeError):
@@ -136,7 +124,6 @@ class LoginWindow(QWidget):
     @asyncSlot()
     async def try_login(self) -> None:
         """Проверяет логин/пароль в БД и при успехе открывает главное окно."""
-
         if app_core.db is None:
             CustomMessageBox.warning(self, "База данных", "База данных ещё не готова.")
             return
@@ -171,7 +158,6 @@ class LoginWindow(QWidget):
 
     def _save_remember(self, login: str, password: str) -> None:
         """Сохраняет/очищает учётные данные в зависимости от галочки 'Запомнить'."""
-
         if self.remember_cb.isChecked():
             encoded_pass = base64.b64encode(password.encode("utf-8")).decode("ascii")
             save_settings({"login": login, "password": encoded_pass, "remember": True})
