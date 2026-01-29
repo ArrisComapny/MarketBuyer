@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Signal, QSize, Qt
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QProgressBar, QLabel
 
 from gui.style import AppStyle
 
@@ -76,3 +76,4 @@ class AccountRowActions(QWidget):
     def _emit_more(self) -> None:
         """Обработчик нажатия кнопки More."""
         self.moreClicked.emit(self.phone10)
+

@@ -21,6 +21,7 @@ from gui.style import AppStyle
 from gui.widgets.account_row_actions import AccountRowActions
 from gui.widgets.filter_panel import FilterPanel
 from gui.widgets.accounts_table import AccountsTable
+from gui.all_activation import AllActivationDialog
 
 from utils.messagebox import CustomMessageBox
 from utils.phone import format_phone_ru
@@ -46,7 +47,7 @@ class MainWindow(QMainWindow):
         self._browser_tasks: dict[str, asyncio.Task] = {}
         self._browser_controllers: dict[str, BrowserController] = {}
         self._account_proxy: dict[str, int] = {}
-        self._running_ui: dict[str, str] = {}
+        self._running_ui: dict[str, tuple[int | None, str]] = {}
 
         self.proxy_pool = ProxyPool()
         self._more_menu = None
@@ -74,6 +75,7 @@ class MainWindow(QMainWindow):
         self.btn_add = QPushButton("Добавить ЛК")
         self.btn_activate = QPushButton("Активировать")
         self.btn_add.clicked.connect(self.add_personal_account)
+        self.btn_activate.clicked.connect(self.open_all_activation)
 
         for b in (self.btn_add, self.btn_activate):
             b.setMinimumHeight(35)
@@ -165,13 +167,22 @@ class MainWindow(QMainWindow):
         async with app_core.db.get_session() as session:
             rows = await AccountRepo.get_list_accounts(session)
 
-        running_ui = {
-            phone10: self._running_ui.get(phone10, "Запускается…")
-            for phone10, task in self._browser_tasks.items()
-            if task and not task.done()
-        }
+        running_ui_text: dict[str, str] = {}
+        for phone10, task in self._browser_tasks.items():
+            if not task or task.done():
+                continue
+            ui = self._running_ui.get(phone10)
+            if not ui:
+                running_ui_text[phone10] = "Запускается…"
+                continue
 
-        self.table.fill(rows, running_ui)
+            percent, text = ui
+            if text == "BROWSER_STARTED":
+                running_ui_text[phone10] = "Запущено"
+            else:
+                running_ui_text[phone10] = f"{percent}% • {text}" if percent is not None else text
+
+        self.table.fill(rows, running_ui_text)
         self.apply_filters()
 
     def apply_filters(self) -> None:
@@ -257,6 +268,11 @@ class MainWindow(QMainWindow):
         dlg.account_saved.connect(self.load_accounts)
         dlg.exec()
 
+    def open_all_activation(self) -> None:
+        """Открывает окно массовой активации аккаунтов."""
+        dlg = AllActivationDialog(self)
+        dlg.exec()
+
     async def _save_comment_async(self, phone10: str, comment: str) -> None:
         """Асинхронно сохраняет комментарий аккаунта в БД. Вызывается при изменении ячейки комментария в таблице."""
         try:
@@ -278,7 +294,7 @@ class MainWindow(QMainWindow):
             dlg.account_saved.connect(self.load_accounts)
             dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
 
-            dlg.exec()
+            dlg.open()
         finally:
             self.table.setDisabled(False)
 
@@ -326,7 +342,9 @@ class MainWindow(QMainWindow):
         old_task = self._browser_tasks.get(phone10)
         if old_task and not old_task.done():
             self._show_warning("Запуск", f"Аккаунт {phone10} уже запущен")
-            self._set_row_loading(phone10, True, self._running_ui.get(phone10, "Запускается…"))
+            ui = self._running_ui.get(phone10)
+            loading_text = f"{ui[0]}% • {ui[1]}" if ui and ui[0] is not None else (ui[1] if ui else "Запускается…")
+            self._set_row_loading(phone10, True, loading_text)
             return
 
         account = await self._get_account_by_phone(phone10)
@@ -349,11 +367,15 @@ class MainWindow(QMainWindow):
 
         self._account_proxy[phone10] = proxy.id
 
+        def _on_progress(p: int, t: str) -> None:
+            QTimer.singleShot(0, lambda: self._update_progress_ui(phone10, p, t))
+
         controller = BrowserController(
             profile_name=phone10,
             user_agent=ua,
             proxy=proxy,
             user=self.user,
+            on_progress=_on_progress
         )
         controller.account = account
         self._browser_controllers[phone10] = controller
@@ -361,7 +383,7 @@ class MainWindow(QMainWindow):
         task = asyncio.create_task(controller.run(mode=mode))
         self._browser_tasks[phone10] = task
 
-        self._running_ui[phone10] = self._mode_to_loading_text(mode)
+        self._running_ui[phone10] = (None, self._mode_to_loading_text(mode))
 
         def _cleanup(t: asyncio.Task) -> None:
             """Callback, вызываемый после завершения браузерного сценария."""
@@ -466,3 +488,19 @@ class MainWindow(QMainWindow):
 
         settings_menu.addAction(settings_action)
         help_menu.addAction(about_action)
+
+    def _update_progress_ui(self, phone10: str, percent: int, text: str) -> None:
+        percent = max(0, min(100, int(percent)))
+        # 1) Сохраняем прогресс в память (у тебя это используется в load_accounts)
+        self._running_ui[phone10] = (percent, text)
+        # 2) Если браузер реально запустился — ставим "Запущено"
+        if text == "BROWSER_STARTED":
+            self._set_row_loading(phone10, True, "Запущено")
+            return
+        # 3) Иначе показываем обычный прогресс (проценты + текст шага)
+        if text:
+            self._set_row_loading(phone10, True, f"{percent}% • {text}")
+        else:
+            self._set_row_loading(phone10, True, f"{percent}%")
+
+

@@ -11,6 +11,7 @@ import core.app as app_core
 
 from playwright.async_api import async_playwright
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+from typing import Callable, Optional
 
 
 from sqlalchemy import select, desc, update, insert
@@ -31,9 +32,12 @@ ensure_browsers()
 
 
 class BrowserController:
-    def __init__(self, user: User, profile_name: str, user_agent: str = "", proxy=None):
+    def __init__(self, user: User, profile_name: str, user_agent: str = "", proxy=None,
+                 on_progress: Optional[Callable[[int, str], None]] = None):
+
         self.profile_dir = Path(os.getcwd()) / "profiles" / profile_name
         self.profile_dir.mkdir(parents=True, exist_ok=True)
+        self.on_progress = on_progress
 
         self.context = None
         self.user_agent = user_agent
@@ -65,15 +69,21 @@ class BrowserController:
             self.context = await p.chromium.launch_persistent_context(
                 user_data_dir=str(self.profile_dir),
                 channel="chrome",
-                headless=False,
+                headless = False if mode == "scenario_start_process" else True,
                 proxy=proxy_cfg,
                 user_agent=self.user_agent or None,
                 locale="ru-RU",
+                no_viewport=True,
                 args=[
                     "--disable-blink-features=AutomationControlled",
                     "--disable-infobars",
+                    "--window-size=1280,800"
+
                 ],
             )
+            if self.on_progress:
+                self.on_progress(0, "BROWSER_STARTED")
+
             self.context.set_default_timeout(0)
             self.context.set_default_navigation_timeout(0)
             pages = self.context.pages
@@ -168,7 +178,7 @@ class BrowserController:
                 code = result.scalars().first()
                 if code:
                     break
-                await asyncio.sleep(5)
+                await asyncio.sleep(3)
             else:
                 raise Exception("Код не пришел")
             return code
@@ -222,7 +232,9 @@ class BrowserController:
             await self.human_wait()
             await self.human_click(btn)
         except PlaywrightTimeoutError:
+            print(f"реклама закрыта")
             pass
+
 
     async def accept_cookie(self):
         try:
@@ -234,6 +246,7 @@ class BrowserController:
             await self.human_wait()
             await self.human_click(cookie_btn)
         except PlaywrightTimeoutError:
+            print("cookie уже были приняты или кнопка не появилась")
             pass
 
     async def click_login_btn(self):
@@ -275,10 +288,7 @@ class BrowserController:
         await self.human_wait()
         await self.human_click(request_code_btn)
         await self.humanize()
-        # проверка: не вылезло ли ограничение/ошибка
-
         # после клика "Получить код"
-
         await self.page.wait_for_timeout(300)
 
         error_text = None
@@ -313,7 +323,19 @@ class BrowserController:
             await self.human_click(el)
             await el.fill(ch)
 
+        try:
+            await self.page.wait_for_selector(
+                'a[data-testid="profile"]',
+                state="visible",
+                timeout=10000
+            )
+            print( f"{phone} вход в аккаунт выполнен")
+        except PlaywrightTimeoutError:
+            raise Exception("Кнопка 'Профиль' не появилась — логин не выполнен")
+
         return True
+
+
 
     async def get_profile_gender(self) -> str | None:
 
@@ -426,23 +448,31 @@ class BrowserController:
         await self.humanize()
         await self.human_wait()
         await self.human_click(save_btn)
+        print(f"{phone10} вход в аккаунт выполнен")
         await self._update_account_status(phone10, "login")
         await self.users_accounts(phone10)
 
     async def scenario_activate(self):
         print("[SCENARIO] activate")
+        self.on_progress(5, "Открываю сайт…")
         await self.wait_full_load()
         await self.humanize()
+        self.on_progress(15, "Закрываю модалки…")
         await self.close_modal()
         await self.humanize()
+        self.on_progress(25, "Принимаю cookies…")
         await self.accept_cookie()
         await self.humanize()
+        self.on_progress(40, "Запрашиваю код…")
         await self.click_login_btn()
         await self.humanize()
+        self.on_progress(75, "Заполняю профиль…")
         await self.changing_name_and_gender()
         await self.human_wait()
         await self.humanize()
+        self.on_progress(95, "Завершаю…")
         await self.close()
+        self.on_progress(100, "Готово")
 
     async def scenario_start_process(self):
         print("[SCENARIO] start_process- работа с аккаунтом")
@@ -451,15 +481,21 @@ class BrowserController:
 
     async def scenario_logout(self,phone10):
         print("[SCENARIO] login - Авторизация")
+        self.on_progress(5, "Открываю сайт…")
         await self.wait_full_load()
         await self.humanize()
+        self.on_progress(15, "Закрываю модалки…")
         await self.close_modal()
         await self.humanize()
+        self.on_progress(25, "Принимаю cookies…")
         await self.accept_cookie()
         await self.humanize()
+        self.on_progress(40, "Запрашиваю код…")
         await self.click_login_btn()
+        self.on_progress(80, "Меняю статус на Login")
         await self._update_account_status(phone10, "login")
         await self.close()
+        self.on_progress(100, "Готово")
 
 
     async def close(self):

@@ -64,7 +64,7 @@ class FilterPanel(QWidget):
         label = QLabel("Фильтр по статусам:", row)
         row_layout.addWidget(label)
 
-        self.cb_disable = QCheckBox("Disable", row)
+        self.cb_disable = QCheckBox("disable", row)
         self.cb_login = QCheckBox("login", row)
         self.cb_logout = QCheckBox("logout", row)
 
