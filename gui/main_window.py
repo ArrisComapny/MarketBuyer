@@ -9,13 +9,14 @@ from typing import Callable, Type
 from qasync import asyncSlot
 from PySide6.QtGui import QAction
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMenu
+from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMenu, QCheckBox
 
 import core.app as app_core
 
 from config import PROFILE_DIR
 from core.proxy_pool import ProxyPool
 from core.browser import BrowserController
+from collections import Counter
 
 from gui.style import AppStyle
 from gui.widgets.account_row_actions import AccountRowActions
@@ -259,7 +260,7 @@ class MainWindow(QMainWindow):
                 await self.proxy_pool.release(proxy_id)
 
             # 4) почистить состояния
-            self._browser_tasks.pop(phone10, None)
+            # self._browser_tasks.pop(phone10, None)
             self._browser_controllers.pop(phone10, None)
             self._running_ui.pop(phone10, None)
 
@@ -304,7 +305,8 @@ class MainWindow(QMainWindow):
 
     def open_all_activation(self) -> None:
         """Открывает окно массовой активации аккаунтов."""
-        dlg = AllActivationDialog(self)
+        counts = self._selected_status_counts()
+        dlg = AllActivationDialog(parent=self, counts=counts)
         dlg.exec()
 
     async def _save_comment_async(self, phone10: str, comment: str) -> None:
@@ -536,5 +538,34 @@ class MainWindow(QMainWindow):
             self._set_row_loading(phone10, True, f"{percent}%")
         else:
             self._set_row_loading(phone10, True, f"{percent}%")
+
+    def _selected_status_counts(self) -> dict[str, int]:
+        counts = Counter()
+
+        total_all = self.table.rowCount()
+
+        for row in range(total_all):
+            w = self.table.cellWidget(row, 0)
+            cb = w.findChild(QCheckBox) if w else None
+            if not cb or not cb.isChecked():
+                continue
+
+            st_item = self.table.item(row, 2)
+            st = (st_item.text() if st_item else "").strip().lower()
+            if st in ("disable", "login", "logout"):
+                counts[st] += 1
+            else:
+                counts["unknown"] += 1
+
+        total_selected = sum(counts.values())
+
+        return {
+            "disable": counts.get("disable", 0),
+            "login": counts.get("login", 0),
+            "logout": counts.get("logout", 0),
+            "unknown": counts.get("unknown", 0),
+            "total_selected": total_selected,
+            "total_all": total_all,
+        }
 
 

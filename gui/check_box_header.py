@@ -60,6 +60,7 @@ class CheckBoxHeader(QHeaderView):
             if self._state == Qt.CheckState.Checked
             else Qt.CheckState.Checked
         )
+        self.viewport().update()  # <- добавить
 
     def _create_checkbox_option(self, section_rect: QRect) -> QStyleOptionButton:
         """Создаёт и настраивает QStyleOptionButton для чекбокса."""

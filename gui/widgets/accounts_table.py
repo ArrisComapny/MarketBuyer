@@ -69,7 +69,7 @@ class AccountsTable(QTableWidget):
 
         self.blockSignals(False)
         self._filling = False
-        self.header.setState(Qt.CheckState.Unchecked)
+        # self.header.setState(Qt.CheckState.Unchecked)
 
     def _fill_row(self,
                   row: int,
