@@ -469,10 +469,11 @@ class BrowserController:
         self.on_progress(75, "Заполняю профиль…")
         await self.changing_name_and_gender()
         await self.human_wait()
-        await self.humanize()
         self.on_progress(95, "Завершаю…")
-        await self.close()
+        await self.humanize()
         self.on_progress(100, "Готово")
+        await self.close()
+
 
     async def scenario_start_process(self):
         print("[SCENARIO] start_process- работа с аккаунтом")
@@ -494,8 +495,9 @@ class BrowserController:
         await self.click_login_btn()
         self.on_progress(80, "Меняю статус на Login")
         await self._update_account_status(phone10, "login")
-        await self.close()
         self.on_progress(100, "Готово")
+        await self.close()
+
 
 
     async def close(self):

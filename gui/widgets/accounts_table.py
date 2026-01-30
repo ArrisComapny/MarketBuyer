@@ -17,6 +17,7 @@ class AccountsTable(QTableWidget):
     """Таблица аккаунтов."""
 
     runClicked = Signal(str)
+    cancelClicked = Signal(str)
     settingsClicked = Signal(str)
     deleteClicked = Signal(str)
     moreClicked = Signal(str)
@@ -117,6 +118,7 @@ class AccountsTable(QTableWidget):
         actions = AccountRowActions(phone10=phone10, run_text=run_text, parent=self)
 
         actions.runClicked.connect(self.runClicked)
+        actions.cancelClicked.connect(self.cancelClicked)
         actions.settingsClicked.connect(self.settingsClicked)
         actions.deleteClicked.connect(self.deleteClicked)
         actions.moreClicked.connect(self.moreClicked)

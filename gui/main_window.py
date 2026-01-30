@@ -91,6 +91,7 @@ class MainWindow(QMainWindow):
 
         # ---------------- Signals from table ----------------
         self.table.runClicked.connect(self.on_run_clicked_phone)
+        self.table.cancelClicked.connect(self.on_cancel_clicked_phone)
         self.table.settingsClicked.connect(self.on_settings_clicked_phone)
         self.table.deleteClicked.connect(self.on_delete_clicked_phone)
         self.table.moreClicked.connect(self.on_more_clicked_phone)
@@ -234,6 +235,39 @@ class MainWindow(QMainWindow):
         self._set_row_loading(phone10, True, self._mode_to_loading_text(mode))
 
         asyncio.create_task(self.run_account_with_proxy(phone10, mode=mode))
+
+    def on_cancel_clicked_phone(self, phone10: str) -> None:
+        """Отмена запущенного сценария: закрываем браузер и отменяем task."""
+        task = self._browser_tasks.get(phone10)
+        controller = self._browser_controllers.get(phone10)
+
+        async def _stop():
+            # 1) закрыть браузер (самое важное)
+            if controller:
+                try:
+                    await controller.close()
+                except Exception:
+                    pass
+
+            # 2) отменить asyncio task
+            if task and not task.done():
+                task.cancel()
+
+            # 3) освободить прокси
+            proxy_id = self._account_proxy.pop(phone10, None)
+            if proxy_id is not None:
+                await self.proxy_pool.release(proxy_id)
+
+            # 4) почистить состояния
+            self._browser_tasks.pop(phone10, None)
+            self._browser_controllers.pop(phone10, None)
+            self._running_ui.pop(phone10, None)
+
+            # 5) вернуть кнопку в норму
+            self._set_row_loading(phone10, False)
+            self._schedule_reload(100)
+
+        asyncio.create_task(_stop())
 
     def on_settings_clicked_phone(self, phone10: str) -> None:
         """Открывает окно редактирования аккаунта."""
@@ -493,13 +527,13 @@ class MainWindow(QMainWindow):
         percent = max(0, min(100, int(percent)))
         # 1) Сохраняем прогресс в память (у тебя это используется в load_accounts)
         self._running_ui[phone10] = (percent, text)
-        # 2) Если браузер реально запустился — ставим "Запущено"
+        # 2) Если браузер реально запустился — ставим "0%"
         if text == "BROWSER_STARTED":
             self._set_row_loading(phone10, True, "Запущено")
             return
         # 3) Иначе показываем обычный прогресс (проценты + текст шага)
         if text:
-            self._set_row_loading(phone10, True, f"{percent}% • {text}")
+            self._set_row_loading(phone10, True, f"{percent}%")
         else:
             self._set_row_loading(phone10, True, f"{percent}%")
 

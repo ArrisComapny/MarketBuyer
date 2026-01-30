@@ -10,6 +10,7 @@ class AccountRowActions(QWidget):
     """Виджет действий строки (колонка "Действие")."""
 
     runClicked = Signal(str)
+    cancelClicked = Signal(str)
     settingsClicked = Signal(str)
     deleteClicked = Signal(str)
     moreClicked = Signal(str)
@@ -17,6 +18,11 @@ class AccountRowActions(QWidget):
     def __init__(self, phone10: str, run_text: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.phone10 = str(phone10).strip()
+
+        self._loading = False
+        self._loading_text = run_text
+        self._can_cancel = False
+
 
         self.btn_run = QPushButton(run_text, self)
         self.btn_run.setFixedSize(105, 25)
@@ -55,14 +61,37 @@ class AccountRowActions(QWidget):
         self.btn_more.clicked.connect(self._emit_more)
 
     def set_run_loading(self, loading: bool, text: str, qss: str) -> None:
-        """Переводит кнопку Run в состояние загрузки или возвращает её в норму."""
-        self.btn_run.setDisabled(loading)
+        self._loading = bool(loading)
+
+        # СЦЕНАРИЙ ЗАКОНЧИЛСЯ → сбрасываем флаг отмены
+        if not loading:
+            self._can_cancel = False
+
         if text:
-            self.btn_run.setText(text)
+            self._loading_text = text
+
+        # Браузер реально запущен → разрешаем отмену (и больше НЕ запрещаем)
+        if text == "Запущено":
+            self._can_cancel = True
+
+        # Кнопка запуска
+        self.btn_run.setDisabled(loading)
+        self.btn_run.setText(self._loading_text if loading else text)
         self.btn_run.setStyleSheet(qss)
 
+        # Блокируем остальные кнопки строки
+        self.btn_settings.setDisabled(loading)
+        self.btn_delete.setDisabled(loading)
+        self.btn_more.setDisabled(loading)
+
     def _emit_run(self) -> None:
-        """Обработчик нажатия кнопки Run."""
+        if self._loading and not self._can_cancel:
+            return
+
+        if self._loading and self.btn_run.text() == "Отмена":
+            self.cancelClicked.emit(self.phone10)
+            return
+
         self.runClicked.emit(self.phone10)
 
     def _emit_settings(self) -> None:
@@ -76,4 +105,24 @@ class AccountRowActions(QWidget):
     def _emit_more(self) -> None:
         """Обработчик нажатия кнопки More."""
         self.moreClicked.emit(self.phone10)
+
+    def enterEvent(self, event) -> None:
+        # Если сценарий запущен (кнопка disabled) — при наведении показываем "Отмена"
+        if self._loading and self._can_cancel:
+            self._show_cancel()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        # Уходим мышью — возвращаем текст прогресса/загрузки
+        if self._loading:
+            self._restore_loading_text()
+        super().leaveEvent(event)
+
+    def _show_cancel(self) -> None:
+        self.btn_run.setEnabled(True)  # временно даём нажать
+        self.btn_run.setText("Отмена")
+
+    def _restore_loading_text(self) -> None:
+        self.btn_run.setEnabled(False)
+        self.btn_run.setText(self._loading_text)
 
