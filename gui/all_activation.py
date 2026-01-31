@@ -1,15 +1,5 @@
-from PySide6.QtWidgets import (
-    QDialog,
-    QVBoxLayout,
-    QHBoxLayout,
-    QLabel,
-    QCheckBox,
-    QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
-    QHeaderView,
-    QWidget,
-)
+from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QPushButton,
+QTableWidget, QTableWidgetItem, QHeaderView, QWidget,)
 from PySide6.QtCore import Qt
 
 
@@ -75,7 +65,7 @@ class AllActivationDialog(QDialog):
         # ---------- RIGHT (ПУСТАЯ ТАБЛИЦА) ----------
         self.table = QTableWidget(self)
         self.table.setColumnCount(4)
-        self.table.setRowCount(12)  # временно, просто сетка
+        self.table.verticalHeader().setDefaultSectionSize(23)
         self.table.setHorizontalHeaderLabels(["Телефон","Статус", "%", "Шаг"])
 
         self.table.verticalHeader().setVisible(True)
@@ -93,18 +83,10 @@ class AllActivationDialog(QDialog):
         hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
 
         self.table.setColumnWidth(0, 190)
-        self.table.setColumnWidth(1, 90)
-        self.table.setColumnWidth(2, 90)
+        self.table.setColumnWidth(1, 60)
+        self.table.setColumnWidth(2, 40)
 
-        # заполняем пустыми ячейками, чтобы была сетка
-        for r in range(self.table.rowCount()):
-            for c in range(self.table.columnCount()):
-                it = QTableWidgetItem("")
-                if c == 1:
-                    it.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
-                else:
-                    it.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-                self.table.setItem(r, c, it)
+        self.table.setRowCount(0)  # будет заполняться через set_selected_accounts()
 
         mid.addWidget(left_box, 0)
         mid.addWidget(self.table, 1)
@@ -131,4 +113,26 @@ class AllActivationDialog(QDialog):
         else:
             # Нажали "Отмена"
             self._running = False
+
+    def set_selected_accounts(self, rows: list[dict]) -> None:
+        """
+        rows: [{phone10, status, row_index}, ...]
+        """
+        self.table.setRowCount(len(rows))
+
+        for r, data in enumerate(rows):
+            phone = data.get("phone10", "")
+            status = data.get("status", "")
+
+            it_phone = QTableWidgetItem(phone)
+            it_status = QTableWidgetItem(status)
+            it_percent = QTableWidgetItem("0%")
+            it_step = QTableWidgetItem("")
+
+            it_status.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+
+            self.table.setItem(r, 0, it_phone)
+            self.table.setItem(r, 1, it_status)
+            self.table.setItem(r, 2, it_percent)
+            self.table.setItem(r, 3, it_step)
 

@@ -304,9 +304,12 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def open_all_activation(self) -> None:
-        """Открывает окно массовой активации аккаунтов."""
         counts = self._selected_status_counts()
         dlg = AllActivationDialog(parent=self, counts=counts)
+
+        rows = self.table.selected_accounts_rows()
+        dlg.set_selected_accounts(rows)
+
         dlg.exec()
 
     async def _save_comment_async(self, phone10: str, comment: str) -> None:
@@ -567,5 +570,7 @@ class MainWindow(QMainWindow):
             "total_selected": total_selected,
             "total_all": total_all,
         }
+
+
 
 

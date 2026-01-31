@@ -187,3 +187,24 @@ class AccountsTable(QTableWidget):
 
         phone10 = phone_item.data(Qt.ItemDataRole.UserRole)
         self.commentChanged.emit(phone10, item.text().strip())
+
+    def selected_accounts_rows(self) -> list[dict]:
+        out: list[dict] = []
+        for row in range(self.rowCount()):
+            cb = self._row_checkbox(row)
+            if not cb or not cb.isChecked():
+                continue
+
+            phone_item = self.item(row, 1)  # колонка телефона
+            phone10 = phone_item.data(Qt.ItemDataRole.UserRole) if phone_item else None
+
+            status_item = self.item(row, 2)  # колонка статуса
+            status = (status_item.text() if status_item else "").strip()
+
+            if phone10:
+                out.append({
+                    "phone10": str(phone10).strip(),
+                    "status": status,
+                    "row_index": row,
+                })
+        return out
