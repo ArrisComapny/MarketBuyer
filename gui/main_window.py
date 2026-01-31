@@ -310,6 +310,36 @@ class MainWindow(QMainWindow):
         rows = self.table.selected_accounts_rows()
         dlg.set_selected_accounts(rows)
 
+        def _start(rows: list[dict], relogin_login: bool) -> None:
+            for d in rows:
+                phone10 = d.get("phone10", "")
+                status = (d.get("status", "") or "").strip().lower()
+                if not phone10:
+                    continue
+
+                # базовый режим по статусу
+                mode = self._status_to_mode(status)
+                if not mode:
+                    continue
+
+                # если включили галку "Авторизовать аккаунты со статусом login"
+                # то для login вместо "scenario_start_process" делаем "logout-login"
+                if status == "login" and relogin_login:
+                    mode = "logout-login"
+
+                # Запускаем и обновляем прогресс и в главной таблице, и в диалоге
+                self._set_row_loading(phone10, True, self._mode_to_loading_text(mode))
+                asyncio.create_task(self.run_account_with_proxy(phone10, mode=mode, mass_dialog=dlg))
+
+        def _cancel(rows: list[dict]) -> None:
+            for d in rows:
+                phone10 = d.get("phone10", "")
+                if phone10:
+                    self.on_cancel_clicked_phone(phone10)
+
+        dlg.startRequested.connect(_start)
+        dlg.cancelRequested.connect(_cancel)
+
         dlg.exec()
 
     async def _save_comment_async(self, phone10: str, comment: str) -> None:
@@ -376,7 +406,9 @@ class MainWindow(QMainWindow):
 
         self._more_menu.exec(btn_more.mapToGlobal(btn_more.rect().bottomLeft()))
 
-    async def run_account_with_proxy(self, phone10: str, mode: str) -> None:
+    async def run_account_with_proxy(self, phone10: str, mode: str,
+                                     mass_dialog: AllActivationDialog | None = None) -> None:
+
         """Запускает браузерный сценарий для аккаунта с выделением прокси и контролем жизненного цикла."""
         old_task = self._browser_tasks.get(phone10)
         if old_task and not old_task.done():
@@ -408,6 +440,8 @@ class MainWindow(QMainWindow):
 
         def _on_progress(p: int, t: str) -> None:
             QTimer.singleShot(0, lambda: self._update_progress_ui(phone10, p, t))
+            if mass_dialog is not None:
+                QTimer.singleShot(0, lambda: mass_dialog.update_progress(phone10, p, t))
 
         controller = BrowserController(
             profile_name=phone10,
@@ -423,6 +457,8 @@ class MainWindow(QMainWindow):
         self._browser_tasks[phone10] = task
 
         self._running_ui[phone10] = (None, self._mode_to_loading_text(mode))
+
+
 
         def _cleanup(t: asyncio.Task) -> None:
             """Callback, вызываемый после завершения браузерного сценария."""

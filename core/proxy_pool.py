@@ -11,6 +11,7 @@ class ProxyPool:
     def __init__(self):
         self._lock = asyncio.Lock()
         self._busy: set[int] = set()
+        self._cond = asyncio.Condition(self._lock)  # 👈 ВАЖНО
 
     async def _load_proxies(self) -> list[Proxy]:
         async with Database().get_session() as session:
@@ -37,55 +38,53 @@ class ProxyPool:
             return False, f"Смена IP ошибка: {e}"
 
     async def release(self, proxy_id: int) -> None:
-        async with self._lock:
+        async with self._cond:
             self._busy.discard(proxy_id)
+            self._cond.notify(1)  # 👈 будим одного ожидающего
 
     async def acquire(
-        self,
-        require_rotate: bool = True,
-        rotate_wait_sec: int = 5,
-        rotate_retries: int = 3,
+            self,
+            require_rotate: bool = True,
+            rotate_wait_sec: int = 5,
+            rotate_retries: int = 3,
     ) -> tuple[Proxy | None, str]:
-        """
-        Возвращает свободный прокси.
-        IP не проверяется вообще.
-        """
 
-        proxies = await self._load_proxies()
-        last_err = "Неизвестная ошибка"
+        while True:
+            # 1) Загружаем прокси вне lock
+            proxies = await self._load_proxies()
 
-        async with self._lock:
-            free = [p for p in proxies if p.id not in self._busy]
-            if not free:
-                return None, "Все прокси заняты"
+            # (необязательно, но полезно)
+            if not proxies:
+                await asyncio.sleep(1)
+                continue
 
-            random.shuffle(free)
+            # 2) Пытаемся занять свободный прокси
+            async with self._cond:
+                free = [p for p in proxies if p.id not in self._busy]
 
-        for proxy in free:
-            async with self._lock:
-                if proxy.id in self._busy:
+                if not free:
+                    await self._cond.wait()
                     continue
+
+                random.shuffle(free)
+                proxy = free[0]
                 self._busy.add(proxy.id)
 
+            # 3) Работаем с прокси вне lock
             try:
                 if require_rotate:
                     for _ in range(rotate_retries):
-                        ok, msg = await self._change_ip(proxy)
+                        ok, _ = await self._change_ip(proxy)
                         if ok:
                             if rotate_wait_sec > 0:
                                 await asyncio.sleep(rotate_wait_sec)
                             break
-                        last_err = msg
                     else:
                         await self.release(proxy.id)
                         continue
 
-                # УСПЕХ — отдаём прокси
                 return proxy, f"Proxy {proxy.id} выдан"
 
-            except Exception as e:
-                last_err = str(e)
+            except Exception:
                 await self.release(proxy.id)
                 continue
-
-        return None, f"Не удалось выдать прокси. Последняя ошибка: {last_err}"

@@ -1,11 +1,14 @@
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QPushButton,
 QTableWidget, QTableWidgetItem, QHeaderView, QWidget,)
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 
 
 class AllActivationDialog(QDialog):
+    startRequested = Signal(list, bool)  # rows, relogin_login_accounts
+    cancelRequested = Signal(list)  # rows
     def __init__(self, parent=None, counts: dict[str, int] | None = None):
         super().__init__(parent)
+
 
         # ================== DATA ==================
         counts = counts or {}
@@ -18,6 +21,8 @@ class AllActivationDialog(QDialog):
 
         # ================== STATE ==================
         self._running = False  # 👈 состояние запуска
+        self._rows: list[dict] = []
+        self._row_by_phone: dict[str, int] = {}
 
         # ================== WINDOW ==================
         self.setWindowTitle("Массовая активация аккаунтов")
@@ -107,12 +112,16 @@ class AllActivationDialog(QDialog):
     # ================== BUTTON LOGIC (UI ONLY) ==================
     def on_start_clicked(self) -> None:
         if not self._running:
-            # Нажали "Запустить"
             self._running = True
             self.btn_start.setText("Отмена")
+
+            relogin_login = self.cb_login.isChecked()
+            self.startRequested.emit(self._rows, relogin_login)
+
         else:
-            # Нажали "Отмена"
             self._running = False
+            self.btn_start.setText("Запустить")
+            self.cancelRequested.emit(self._rows)
 
     def set_selected_accounts(self, rows: list[dict]) -> None:
         """
@@ -135,4 +144,20 @@ class AllActivationDialog(QDialog):
             self.table.setItem(r, 1, it_status)
             self.table.setItem(r, 2, it_percent)
             self.table.setItem(r, 3, it_step)
+
+        self._rows = rows
+        self._row_by_phone = {d.get("phone10", ""): i for i, d in enumerate(rows)}
+
+    def update_progress(self, phone10: str, percent: int, step: str) -> None:
+        r = self._row_by_phone.get(phone10)
+        if r is None:
+            return
+        self.table.item(r, 2).setText(f"{int(percent)}%")
+        self.table.item(r, 3).setText(step or "")
+
+    def update_status(self, phone10: str, status: str) -> None:
+        r = self._row_by_phone.get(phone10)
+        if r is None:
+            return
+        self.table.item(r, 1).setText(status or "")
 
