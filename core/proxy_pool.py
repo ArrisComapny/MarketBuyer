@@ -11,6 +11,7 @@ class ProxyPool:
     def __init__(self):
         self._lock = asyncio.Lock()
         self._busy: set[int] = set()
+        self._capacity_cache: int | None = None
 
     async def _load_proxies(self) -> list[Proxy]:
         async with Database().get_session() as session:
@@ -89,3 +90,13 @@ class ProxyPool:
                 continue
 
         return None, f"Не удалось выдать прокси. Последняя ошибка: {last_err}"
+
+    async def capacity(self) -> int:
+        """
+        Сколько всего прокси доступно (по базе).
+        Кэшируем, чтобы не дёргать БД постоянно.
+        """
+        if self._capacity_cache is None:
+            proxies = await self._load_proxies()
+            self._capacity_cache = len(proxies)
+        return self._capacity_cache

@@ -1,9 +1,11 @@
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QPushButton,
 QTableWidget, QTableWidgetItem, QHeaderView, QWidget,)
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 
 
 class AllActivationDialog(QDialog):
+    startToggled = Signal(bool)  # True=старт, False=отмена
+
     def __init__(self, parent=None, counts: dict[str, int] | None = None):
         super().__init__(parent)
 
@@ -18,6 +20,7 @@ class AllActivationDialog(QDialog):
 
         # ================== STATE ==================
         self._running = False  # 👈 состояние запуска
+        self._row_by_phone: dict[str, int] = {}
 
         # ================== WINDOW ==================
         self.setWindowTitle("Массовая активация аккаунтов")
@@ -107,22 +110,26 @@ class AllActivationDialog(QDialog):
     # ================== BUTTON LOGIC (UI ONLY) ==================
     def on_start_clicked(self) -> None:
         if not self._running:
-            # Нажали "Запустить"
             self._running = True
             self.btn_start.setText("Отмена")
+            self.startToggled.emit(True)
         else:
-            # Нажали "Отмена"
             self._running = False
+            self.btn_start.setText("Запустить")
+            self.startToggled.emit(False)
 
     def set_selected_accounts(self, rows: list[dict]) -> None:
         """
         rows: [{phone10, status, row_index}, ...]
         """
+        self._row_by_phone.clear()
         self.table.setRowCount(len(rows))
 
         for r, data in enumerate(rows):
-            phone = data.get("phone10", "")
-            status = data.get("status", "")
+            phone = (data.get("phone10") or "").strip()
+            status = (data.get("status") or "").strip()
+
+            self._row_by_phone[phone] = r
 
             it_phone = QTableWidgetItem(phone)
             it_status = QTableWidgetItem(status)
@@ -130,9 +137,28 @@ class AllActivationDialog(QDialog):
             it_step = QTableWidgetItem("")
 
             it_status.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+            it_percent.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
 
             self.table.setItem(r, 0, it_phone)
             self.table.setItem(r, 1, it_status)
             self.table.setItem(r, 2, it_percent)
             self.table.setItem(r, 3, it_step)
+
+    def set_row_progress(self, phone10: str, percent: int | None, step: str = "") -> None:
+        phone10 = (phone10 or "").strip()
+        r = self._row_by_phone.get(phone10)
+        if r is None:
+            return
+
+        if percent is not None:
+            self.table.item(r, 2).setText(f"{max(0, min(100, int(percent)))}%")
+        if step:
+            self.table.item(r, 3).setText(step)
+
+    def set_row_status(self, phone10: str, status: str) -> None:
+        phone10 = (phone10 or "").strip()
+        r = self._row_by_phone.get(phone10)
+        if r is None:
+            return
+        self.table.item(r, 1).setText(status)
 
