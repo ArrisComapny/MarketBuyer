@@ -323,17 +323,20 @@ class BrowserController:
             await self.human_click(el)
             await el.fill(ch)
 
-        try:
-            await self.page.wait_for_selector(
-                'a[data-testid="profile"]',
-                state="visible",
-                timeout=10000
-            )
-            print( f"{phone} вход в аккаунт выполнен")
-        except PlaywrightTimeoutError:
-            raise Exception("Кнопка 'Профиль' не появилась — логин не выполнен")
+        profile_selectors = [
+            'a[data-testid="profile"]',
+            'a[data-wba-header-name="LK"]',
+            'a:has-text("Профиль")'
+        ]
+        for sel in profile_selectors:
+            try:
+                await self.page.wait_for_selector(sel, state="visible", timeout=10000)
+                print(f"Профиль найден по селектору: {sel}")
+                return True
+            except PlaywrightTimeoutError:
+                continue
 
-        return True
+        raise Exception("Кнопка 'Профиль' не найдена ни по одному селектору")
 
 
 

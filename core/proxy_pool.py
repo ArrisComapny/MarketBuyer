@@ -1,6 +1,7 @@
 import asyncio
 import aiohttp
 import random
+import time
 from sqlalchemy import select
 
 from database.db import Database
@@ -40,6 +41,97 @@ class ProxyPool:
     async def release(self, proxy_id: int) -> None:
         async with self._lock:
             self._busy.discard(proxy_id)
+
+    async def acquire_mass(
+            self,
+            rotate_total_wait_sec: int = 120,  # общее ожидание смены IP (на один прокси)
+            rotate_interval_sec: int = 10,  # интервал повторов смены IP
+            rotate_wait_after_ok_sec: int = 5,  # пауза после успешной смены IP
+            require_rotate: bool = True,
+
+            wait_free_total_sec: int = 120,  # ✅ ждать свободный прокси до N секунд
+            wait_free_interval_sec: int = 10,  # ✅ проверка каждые N секунд
+    ) -> tuple[Proxy | None, str]:
+        """
+        Выдача прокси ТОЛЬКО для массовой очереди.
+
+        Отличие от текущей версии:
+        - если все прокси заняты, НЕ возвращаем сразу "Все прокси заняты",
+          а ждём освобождения до wait_free_total_sec.
+
+        Затем:
+        - резервируем свободный прокси
+        - если require_rotate=True, пытаемся сменить IP на этом прокси
+          каждые rotate_interval_sec секунд в течение rotate_total_wait_sec
+        """
+
+        last_err = "Неизвестная ошибка"
+
+        # 0) ждём пока появится хотя бы один свободный прокси
+        deadline_free = time.monotonic() + max(0, int(wait_free_total_sec))
+
+        free: list[Proxy] = []
+        while True:
+            proxies = await self._load_proxies()
+
+            async with self._lock:
+                free = [p for p in proxies if p.id not in self._busy]
+                if free:
+                    random.shuffle(free)
+                    break
+
+            if time.monotonic() >= deadline_free:
+                return None, "Все прокси заняты (таймаут ожидания)"
+
+            await asyncio.sleep(max(0.2, float(wait_free_interval_sec)))
+
+        # 1) пробуем выдать один из свободных
+        for proxy in free:
+            # 1.1) резервируем прокси
+            async with self._lock:
+                if proxy.id in self._busy:
+                    continue
+                self._busy.add(proxy.id)
+
+            try:
+                # 1.2) если ротация не нужна — сразу отдаём
+                if not require_rotate:
+                    return proxy, f"Proxy {proxy.id} выдан"
+
+                # 1.3) пытаемся сменить IP на этом прокси в пределах rotate_total_wait_sec
+                deadline_rotate = time.monotonic() + max(0, int(rotate_total_wait_sec))
+
+                while True:
+                    ok, msg = await self._change_ip(proxy)
+
+                    if ok:
+                        if rotate_wait_after_ok_sec > 0:
+                            await asyncio.sleep(rotate_wait_after_ok_sec)
+                        return proxy, f"Proxy {proxy.id} выдан ({msg})"
+
+                    last_err = msg
+
+                    now = time.monotonic()
+                    if now >= deadline_rotate:
+                        # не смогли сменить IP за отведённое время — освобождаем и пробуем другой прокси
+                        await self.release(proxy.id)
+                        break
+
+                    await asyncio.sleep(min(float(rotate_interval_sec), deadline_rotate - now))
+
+            except asyncio.CancelledError:
+                # если массовая очередь отменяется — освобождаем прокси и пробрасываем отмену дальше
+                try:
+                    await self.release(proxy.id)
+                except Exception:
+                    pass
+                raise
+
+            except Exception as e:
+                last_err = str(e)
+                await self.release(proxy.id)
+
+        return None, f"Не удалось выдать прокси. Последняя ошибка: {last_err}"
 
     async def acquire(
         self,

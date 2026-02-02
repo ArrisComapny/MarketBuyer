@@ -143,9 +143,13 @@ class AccountsTable(QTableWidget):
             item.setBackground(colors[st])
 
     def _on_header_checkbox_clicked(self, state: Qt.CheckState) -> None:
-        """Обрабатывает клик по checkbox в заголовке таблицы."""
         checked = state == Qt.CheckState.Checked
+
         for row in range(self.rowCount()):
+            # ✅ пропускаем скрытые фильтром строки
+            if self.isRowHidden(row):
+                continue
+
             cb = self._row_checkbox(row)
             if cb:
                 cb.blockSignals(True)
@@ -155,16 +159,17 @@ class AccountsTable(QTableWidget):
         self.header.setState(state)
 
     def _on_row_checkbox_changed(self) -> None:
-        """Обрабатывает изменение состояния checkbox в строке."""
-        total = self.rowCount()
+        visible_rows = [r for r in range(self.rowCount()) if not self.isRowHidden(r)]
+        total = len(visible_rows)
+
         checked = sum(
-            1 for r in range(total)
+            1 for r in visible_rows
             if (cb := self._row_checkbox(r)) and cb.isChecked()
         )
 
         if checked == 0:
             self.header.setState(Qt.CheckState.Unchecked)
-        elif checked == total:
+        elif total > 0 and checked == total:
             self.header.setState(Qt.CheckState.Checked)
         else:
             self.header.setState(Qt.CheckState.PartiallyChecked)

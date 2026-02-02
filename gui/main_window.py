@@ -219,6 +219,7 @@ class MainWindow(QMainWindow):
                 search_ok = match_phone or match_comment
 
             self.table.setRowHidden(row, not (status_ok and search_ok))
+            self.table._on_row_checkbox_changed()
 
     def on_comment_changed(self, phone10: str, comment: str) -> None:
         """Сохраняет изменённый комментарий аккаунта в БД."""
@@ -460,6 +461,97 @@ class MainWindow(QMainWindow):
 
         task.add_done_callback(_cleanup)
 
+    async def run_account_with_proxy_mass(
+            self,
+            phone10: str,
+            mode: str,
+            on_status: Callable[[str], None] | None = None,
+    ) -> None:
+        """
+        Запуск для МАССОВОЙ очереди.
+        Главное отличие: берём прокси через acquire_mass() (ожидание 10 сек / 2 мин).
+        Главную таблицу не трогаем.
+        """
+        old_task = self._browser_tasks.get(phone10)
+        if old_task and not old_task.done():
+            # для очереди обычно не надо спамить warning, но оставлю статус
+            if on_status:
+                on_status(f"{phone10}: уже запущен")
+            return
+
+        account = await self._get_account_by_phone(phone10)
+        if not account:
+            if on_status:
+                on_status(f"{phone10}: аккаунт не найден")
+            return
+
+        ua = account.get("user_agent", "")
+
+        # ✅ ВАЖНО: для очереди используем acquire_mass()
+        proxy, msg = await self.proxy_pool.acquire_mass(
+            rotate_total_wait_sec=120,
+            rotate_interval_sec=10,
+        )
+
+        if not proxy:
+            if on_status:
+                on_status(f"{phone10}: прокси не выдан — {msg}")
+            return
+
+        if on_status:
+            on_status(f"{phone10}: {msg}")
+
+        self._account_proxy[phone10] = proxy.id
+
+        def _on_progress(p: int, t: str) -> None:
+            # если хочешь — прокидывай прогресс в окно массовой активации
+            if on_status:
+                on_status(f"{phone10}: {p}% • {t}")
+            # главную таблицу не трогаем, но можно оставить обновление UI если тебе норм
+            # (если НЕ хочешь вообще трогать UI главной таблицы для массового — закомментируй строку ниже)
+            QTimer.singleShot(0, lambda: self._update_progress_ui(phone10, p, t))
+
+        controller = BrowserController(
+            profile_name=phone10,
+            user_agent=ua,
+            proxy=proxy,
+            user=self.user,
+            on_progress=_on_progress
+        )
+        controller.account = account
+        self._browser_controllers[phone10] = controller
+
+        task = asyncio.create_task(controller.run(mode=mode))
+        self._browser_tasks[phone10] = task
+
+        def _cleanup(t: asyncio.Task) -> None:
+            async def _async_cleanup() -> None:
+                err_text: str | None = None
+                try:
+                    t.result()
+                except Exception as e:
+                    err_text = str(e)
+
+                proxy_id = self._account_proxy.pop(phone10, None)
+                if proxy_id is not None:
+                    await self.proxy_pool.release(proxy_id)
+
+                if phone10 in self._browser_tasks:
+                    del self._browser_tasks[phone10]
+
+                self._browser_controllers.pop(phone10, None)
+
+                if err_text:
+                    if on_status:
+                        on_status(f"{phone10}: ошибка — {err_text}")
+                else:
+                    if on_status:
+                        on_status(f"{phone10}: готово")
+
+            asyncio.create_task(_async_cleanup())
+
+        task.add_done_callback(_cleanup)
+
     def _show_warning(self, title: str, text: str) -> None:
         """Показывает предупреждающее сообщение пользователю из безопасного Qt-контекста."""
         QTimer.singleShot(0, lambda: CustomMessageBox.warning(self, title, text))
@@ -578,17 +670,22 @@ class MainWindow(QMainWindow):
         }
 
     def _on_mass_toggle(self, running: bool, rows: list[dict], dlg) -> None:
-        """
-        running=True  -> старт
-        running=False -> отмена
-        """
         if running:
             if self._mass_task and not self._mass_task.done():
                 return
+
             self._mass_cancel = False
-            self._mass_task = asyncio.create_task(self.run_selected_accounts_queue(rows, dlg))
+            self._mass_task = asyncio.create_task(
+                self.run_selected_accounts_queue(rows, dlg)
+            )
         else:
+            # ❌ ОТМЕНА
             self._mass_cancel = True
+
+            if self._mass_task and not self._mass_task.done():
+                self._mass_task.cancel()
+
+            asyncio.create_task(self._stop_all_mass_running(dlg))
 
     async def run_selected_accounts_queue(self, rows: list[dict], dlg) -> None:
         """
@@ -628,7 +725,11 @@ class MainWindow(QMainWindow):
 
         try:
             # 4) ждём пока очередь обработается
-            await q.join()
+            try:
+                await q.join()
+            except asyncio.CancelledError:
+                # массовую задачу отменили кнопкой "Отмена"
+                pass
         finally:
             # 5) останавливаем воркеров
             for w in workers:
@@ -681,7 +782,12 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, lambda: self._set_row_loading(phone10, True, "Запуск…"))
 
             # 1) ждём свободный прокси
-            proxy, msg = await self.proxy_pool.acquire()
+            proxy, msg = await self.proxy_pool.acquire_mass(
+                rotate_total_wait_sec=120,
+                rotate_interval_sec=10,
+                rotate_wait_after_ok_sec=5,
+                require_rotate=True,
+            )
             if not proxy:
                 QTimer.singleShot(0, lambda: dlg.set_row_progress(phone10, 0, f"Прокси: {msg}"))
                 QTimer.singleShot(0, lambda: self._set_row_loading(phone10, False))
@@ -736,6 +842,35 @@ class MainWindow(QMainWindow):
             self._running_ui.pop(phone10, None)
 
             QTimer.singleShot(0, lambda: self._set_row_loading(phone10, False))
+
+    async def _stop_all_mass_running(self, dlg) -> None:
+        # 1️⃣ закрываем все браузеры
+        for phone10, controller in list(self._browser_controllers.items()):
+            try:
+                await controller.close()
+            except Exception:
+                pass
+
+            dlg.set_row_progress(phone10, 0, "Отменено")
+            dlg.set_row_status(phone10, "cancel")
+
+        # 2️⃣ отменяем все browser tasks
+        for phone10, task in list(self._browser_tasks.items()):
+            if task and not task.done():
+                task.cancel()
+
+        # 3️⃣ освобождаем прокси
+        for phone10, proxy_id in list(self._account_proxy.items()):
+            try:
+                await self.proxy_pool.release(proxy_id)
+            except Exception:
+                pass
+
+        # 4️⃣ чистим состояние
+        self._browser_tasks.clear()
+        self._browser_controllers.clear()
+        self._account_proxy.clear()
+        self._running_ui.clear()
 
 
 
