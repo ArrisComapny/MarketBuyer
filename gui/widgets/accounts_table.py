@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QWidget, QTableWidget, QTableWidgetItem
 from PySide6.QtWidgets import QHBoxLayout, QCheckBox, QHeaderView, QAbstractItemView
 
 from gui.style import AppStyle
-from gui.check_box_header import CheckBoxHeader
+from gui.widgets.check_box_header import CheckBoxHeader
 from gui.widgets.account_row_actions import AccountRowActions
 
 from utils.phone import format_phone_ru
@@ -17,6 +17,7 @@ class AccountsTable(QTableWidget):
     """Таблица аккаунтов."""
 
     runClicked = Signal(str)
+    cancelClicked = Signal(str)
     settingsClicked = Signal(str)
     deleteClicked = Signal(str)
     moreClicked = Signal(str)
@@ -68,7 +69,7 @@ class AccountsTable(QTableWidget):
 
         self.blockSignals(False)
         self._filling = False
-        self.header.setState(Qt.CheckState.Unchecked)
+        # self.header.setState(Qt.CheckState.Unchecked)
 
     def _fill_row(self,
                   row: int,
@@ -117,6 +118,7 @@ class AccountsTable(QTableWidget):
         actions = AccountRowActions(phone10=phone10, run_text=run_text, parent=self)
 
         actions.runClicked.connect(self.runClicked)
+        actions.cancelClicked.connect(self.cancelClicked)
         actions.settingsClicked.connect(self.settingsClicked)
         actions.deleteClicked.connect(self.deleteClicked)
         actions.moreClicked.connect(self.moreClicked)
@@ -141,9 +143,13 @@ class AccountsTable(QTableWidget):
             item.setBackground(colors[st])
 
     def _on_header_checkbox_clicked(self, state: Qt.CheckState) -> None:
-        """Обрабатывает клик по checkbox в заголовке таблицы."""
         checked = state == Qt.CheckState.Checked
+
         for row in range(self.rowCount()):
+            # ✅ пропускаем скрытые фильтром строки
+            if self.isRowHidden(row):
+                continue
+
             cb = self._row_checkbox(row)
             if cb:
                 cb.blockSignals(True)
@@ -153,16 +159,17 @@ class AccountsTable(QTableWidget):
         self.header.setState(state)
 
     def _on_row_checkbox_changed(self) -> None:
-        """Обрабатывает изменение состояния checkbox в строке."""
-        total = self.rowCount()
+        visible_rows = [r for r in range(self.rowCount()) if not self.isRowHidden(r)]
+        total = len(visible_rows)
+
         checked = sum(
-            1 for r in range(total)
+            1 for r in visible_rows
             if (cb := self._row_checkbox(r)) and cb.isChecked()
         )
 
         if checked == 0:
             self.header.setState(Qt.CheckState.Unchecked)
-        elif checked == total:
+        elif total > 0 and checked == total:
             self.header.setState(Qt.CheckState.Checked)
         else:
             self.header.setState(Qt.CheckState.PartiallyChecked)
@@ -185,3 +192,24 @@ class AccountsTable(QTableWidget):
 
         phone10 = phone_item.data(Qt.ItemDataRole.UserRole)
         self.commentChanged.emit(phone10, item.text().strip())
+
+    def selected_accounts_rows(self) -> list[dict]:
+        out: list[dict] = []
+        for row in range(self.rowCount()):
+            cb = self._row_checkbox(row)
+            if not cb or not cb.isChecked():
+                continue
+
+            phone_item = self.item(row, 1)  # колонка телефона
+            phone10 = phone_item.data(Qt.ItemDataRole.UserRole) if phone_item else None
+
+            status_item = self.item(row, 2)  # колонка статуса
+            status = (status_item.text() if status_item else "").strip()
+
+            if phone10:
+                out.append({
+                    "phone10": str(phone10).strip(),
+                    "status": status,
+                    "row_index": row,
+                })
+        return out

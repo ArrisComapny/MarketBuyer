@@ -9,24 +9,26 @@ from typing import Callable, Type
 from qasync import asyncSlot
 from PySide6.QtGui import QAction
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMenu
+from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMenu, QCheckBox
 
 import core.app as app_core
 
 from config import PROFILE_DIR
 from core.proxy_pool import ProxyPool
 from core.browser import BrowserController
+from collections import Counter
 
 from gui.style import AppStyle
 from gui.widgets.account_row_actions import AccountRowActions
 from gui.widgets.filter_panel import FilterPanel
 from gui.widgets.accounts_table import AccountsTable
+from gui.dialogs.all_activation import AllActivationDialog
 
 from utils.messagebox import CustomMessageBox
 from utils.phone import format_phone_ru
 
-from gui.setting_menu_bar import ProxyManagerDialog
-from gui.add_personal_account import AddAccountDialog
+from gui.dialogs.setting_menu_bar import ProxyManagerDialog
+from gui.dialogs.add_personal_account import AddAccountDialog
 
 from database.repositories import AccountRepo, UsersAccountsRepo
 
@@ -46,7 +48,11 @@ class MainWindow(QMainWindow):
         self._browser_tasks: dict[str, asyncio.Task] = {}
         self._browser_controllers: dict[str, BrowserController] = {}
         self._account_proxy: dict[str, int] = {}
-        self._running_ui: dict[str, str] = {}
+        self._running_ui: dict[str, tuple[int | None, str]] = {}
+
+        # ================= Массовый запуск =================
+        self._mass_task: asyncio.Task | None = None
+        self._mass_cancel: bool = False
 
         self.proxy_pool = ProxyPool()
         self._more_menu = None
@@ -74,6 +80,7 @@ class MainWindow(QMainWindow):
         self.btn_add = QPushButton("Добавить ЛК")
         self.btn_activate = QPushButton("Активировать")
         self.btn_add.clicked.connect(self.add_personal_account)
+        self.btn_activate.clicked.connect(self.open_all_activation)
 
         for b in (self.btn_add, self.btn_activate):
             b.setMinimumHeight(35)
@@ -89,6 +96,7 @@ class MainWindow(QMainWindow):
 
         # ---------------- Signals from table ----------------
         self.table.runClicked.connect(self.on_run_clicked_phone)
+        self.table.cancelClicked.connect(self.on_cancel_clicked_phone)
         self.table.settingsClicked.connect(self.on_settings_clicked_phone)
         self.table.deleteClicked.connect(self.on_delete_clicked_phone)
         self.table.moreClicked.connect(self.on_more_clicked_phone)
@@ -165,13 +173,22 @@ class MainWindow(QMainWindow):
         async with app_core.db.get_session() as session:
             rows = await AccountRepo.get_list_accounts(session)
 
-        running_ui = {
-            phone10: self._running_ui.get(phone10, "Запускается…")
-            for phone10, task in self._browser_tasks.items()
-            if task and not task.done()
-        }
+        running_ui_text: dict[str, str] = {}
+        for phone10, task in self._browser_tasks.items():
+            if not task or task.done():
+                continue
+            ui = self._running_ui.get(phone10)
+            if not ui:
+                running_ui_text[phone10] = "Запускается…"
+                continue
 
-        self.table.fill(rows, running_ui)
+            percent, text = ui
+            if text == "BROWSER_STARTED":
+                running_ui_text[phone10] = "Запущено"
+            else:
+                running_ui_text[phone10] = f"{percent}% • {text}" if percent is not None else text
+
+        self.table.fill(rows, running_ui_text)
         self.apply_filters()
 
     def apply_filters(self) -> None:
@@ -202,6 +219,7 @@ class MainWindow(QMainWindow):
                 search_ok = match_phone or match_comment
 
             self.table.setRowHidden(row, not (status_ok and search_ok))
+            self.table._on_row_checkbox_changed()
 
     def on_comment_changed(self, phone10: str, comment: str) -> None:
         """Сохраняет изменённый комментарий аккаунта в БД."""
@@ -223,6 +241,39 @@ class MainWindow(QMainWindow):
         self._set_row_loading(phone10, True, self._mode_to_loading_text(mode))
 
         asyncio.create_task(self.run_account_with_proxy(phone10, mode=mode))
+
+    def on_cancel_clicked_phone(self, phone10: str) -> None:
+        """Отмена запущенного сценария: закрываем браузер и отменяем task."""
+        task = self._browser_tasks.get(phone10)
+        controller = self._browser_controllers.get(phone10)
+
+        async def _stop():
+            # 1) закрыть браузер (самое важное)
+            if controller:
+                try:
+                    await controller.close()
+                except Exception:
+                    pass
+
+            # 2) отменить asyncio task
+            if task and not task.done():
+                task.cancel()
+
+            # 3) освободить прокси
+            proxy_id = self._account_proxy.pop(phone10, None)
+            if proxy_id is not None:
+                await self.proxy_pool.release(proxy_id)
+
+            # 4) почистить состояния
+            # self._browser_tasks.pop(phone10, None)
+            self._browser_controllers.pop(phone10, None)
+            self._running_ui.pop(phone10, None)
+
+            # 5) вернуть кнопку в норму
+            self._set_row_loading(phone10, False)
+            self._schedule_reload(100)
+
+        asyncio.create_task(_stop())
 
     def on_settings_clicked_phone(self, phone10: str) -> None:
         """Открывает окно редактирования аккаунта."""
@@ -257,6 +308,17 @@ class MainWindow(QMainWindow):
         dlg.account_saved.connect(self.load_accounts)
         dlg.exec()
 
+    def open_all_activation(self) -> None:
+        counts = self._selected_status_counts()
+        dlg = AllActivationDialog(parent=self, counts=counts)
+
+        rows = self.table.selected_accounts_rows()  # список выбранных аккаунтов
+        dlg.set_selected_accounts(rows)
+
+        dlg.startToggled.connect(lambda running: self._on_mass_toggle(running, rows, dlg))
+
+        dlg.open()
+
     async def _save_comment_async(self, phone10: str, comment: str) -> None:
         """Асинхронно сохраняет комментарий аккаунта в БД. Вызывается при изменении ячейки комментария в таблице."""
         try:
@@ -278,7 +340,7 @@ class MainWindow(QMainWindow):
             dlg.account_saved.connect(self.load_accounts)
             dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
 
-            dlg.exec()
+            dlg.open()
         finally:
             self.table.setDisabled(False)
 
@@ -326,7 +388,9 @@ class MainWindow(QMainWindow):
         old_task = self._browser_tasks.get(phone10)
         if old_task and not old_task.done():
             self._show_warning("Запуск", f"Аккаунт {phone10} уже запущен")
-            self._set_row_loading(phone10, True, self._running_ui.get(phone10, "Запускается…"))
+            ui = self._running_ui.get(phone10)
+            loading_text = f"{ui[0]}% • {ui[1]}" if ui and ui[0] is not None else (ui[1] if ui else "Запускается…")
+            self._set_row_loading(phone10, True, loading_text)
             return
 
         account = await self._get_account_by_phone(phone10)
@@ -349,11 +413,15 @@ class MainWindow(QMainWindow):
 
         self._account_proxy[phone10] = proxy.id
 
+        def _on_progress(p: int, t: str) -> None:
+            QTimer.singleShot(0, lambda: self._update_progress_ui(phone10, p, t))
+
         controller = BrowserController(
             profile_name=phone10,
             user_agent=ua,
             proxy=proxy,
             user=self.user,
+            on_progress=_on_progress
         )
         controller.account = account
         self._browser_controllers[phone10] = controller
@@ -361,7 +429,7 @@ class MainWindow(QMainWindow):
         task = asyncio.create_task(controller.run(mode=mode))
         self._browser_tasks[phone10] = task
 
-        self._running_ui[phone10] = self._mode_to_loading_text(mode)
+        self._running_ui[phone10] = (None, self._mode_to_loading_text(mode))
 
         def _cleanup(t: asyncio.Task) -> None:
             """Callback, вызываемый после завершения браузерного сценария."""
@@ -388,6 +456,97 @@ class MainWindow(QMainWindow):
                     self._show_warning("Сценарий", f"Ошибка для {phone10}:\n{err_text}")
 
                 self._schedule_reload(250)
+
+            asyncio.create_task(_async_cleanup())
+
+        task.add_done_callback(_cleanup)
+
+    async def run_account_with_proxy_mass(
+            self,
+            phone10: str,
+            mode: str,
+            on_status: Callable[[str], None] | None = None,
+    ) -> None:
+        """
+        Запуск для МАССОВОЙ очереди.
+        Главное отличие: берём прокси через acquire_mass() (ожидание 10 сек / 2 мин).
+        Главную таблицу не трогаем.
+        """
+        old_task = self._browser_tasks.get(phone10)
+        if old_task and not old_task.done():
+            # для очереди обычно не надо спамить warning, но оставлю статус
+            if on_status:
+                on_status(f"{phone10}: уже запущен")
+            return
+
+        account = await self._get_account_by_phone(phone10)
+        if not account:
+            if on_status:
+                on_status(f"{phone10}: аккаунт не найден")
+            return
+
+        ua = account.get("user_agent", "")
+
+        # ✅ ВАЖНО: для очереди используем acquire_mass()
+        proxy, msg = await self.proxy_pool.acquire_mass(
+            rotate_total_wait_sec=120,
+            rotate_interval_sec=10,
+        )
+
+        if not proxy:
+            if on_status:
+                on_status(f"{phone10}: прокси не выдан — {msg}")
+            return
+
+        if on_status:
+            on_status(f"{phone10}: {msg}")
+
+        self._account_proxy[phone10] = proxy.id
+
+        def _on_progress(p: int, t: str) -> None:
+            # если хочешь — прокидывай прогресс в окно массовой активации
+            if on_status:
+                on_status(f"{phone10}: {p}% • {t}")
+            # главную таблицу не трогаем, но можно оставить обновление UI если тебе норм
+            # (если НЕ хочешь вообще трогать UI главной таблицы для массового — закомментируй строку ниже)
+            QTimer.singleShot(0, lambda: self._update_progress_ui(phone10, p, t))
+
+        controller = BrowserController(
+            profile_name=phone10,
+            user_agent=ua,
+            proxy=proxy,
+            user=self.user,
+            on_progress=_on_progress
+        )
+        controller.account = account
+        self._browser_controllers[phone10] = controller
+
+        task = asyncio.create_task(controller.run(mode=mode))
+        self._browser_tasks[phone10] = task
+
+        def _cleanup(t: asyncio.Task) -> None:
+            async def _async_cleanup() -> None:
+                err_text: str | None = None
+                try:
+                    t.result()
+                except Exception as e:
+                    err_text = str(e)
+
+                proxy_id = self._account_proxy.pop(phone10, None)
+                if proxy_id is not None:
+                    await self.proxy_pool.release(proxy_id)
+
+                if phone10 in self._browser_tasks:
+                    del self._browser_tasks[phone10]
+
+                self._browser_controllers.pop(phone10, None)
+
+                if err_text:
+                    if on_status:
+                        on_status(f"{phone10}: ошибка — {err_text}")
+                else:
+                    if on_status:
+                        on_status(f"{phone10}: готово")
 
             asyncio.create_task(_async_cleanup())
 
@@ -451,6 +610,7 @@ class MainWindow(QMainWindow):
 
         open_action = QAction("Открыть", self)
         save_action = QAction("Сохранить", self)
+        import_action = QAction("Импортировать", self)
         exit_action = QAction("Выход", self)
 
         settings_action = QAction("ProxyManager", self)
@@ -461,8 +621,259 @@ class MainWindow(QMainWindow):
 
         file_menu.addAction(open_action)
         file_menu.addAction(save_action)
+        file_menu.addAction(import_action)
         file_menu.addSeparator()
         file_menu.addAction(exit_action)
 
         settings_menu.addAction(settings_action)
         help_menu.addAction(about_action)
+
+    def _update_progress_ui(self, phone10: str, percent: int, text: str) -> None:
+        percent = max(0, min(100, int(percent)))
+        # 1) Сохраняем прогресс в память (у тебя это используется в load_accounts)
+        self._running_ui[phone10] = (percent, text)
+        # 2) Если браузер реально запустился — ставим "0%"
+        if text == "BROWSER_STARTED":
+            self._set_row_loading(phone10, True, "Запущено")
+            return
+        # 3) Иначе показываем обычный прогресс (проценты + текст шага)
+        if text:
+            self._set_row_loading(phone10, True, f"{percent}%")
+        else:
+            self._set_row_loading(phone10, True, f"{percent}%")
+
+    def _selected_status_counts(self) -> dict[str, int]:
+        counts = Counter()
+
+        total_all = self.table.rowCount()
+
+        for row in range(total_all):
+            w = self.table.cellWidget(row, 0)
+            cb = w.findChild(QCheckBox) if w else None
+            if not cb or not cb.isChecked():
+                continue
+
+            st_item = self.table.item(row, 2)
+            st = (st_item.text() if st_item else "").strip().lower()
+            if st in ("disable", "login", "logout"):
+                counts[st] += 1
+            else:
+                counts["unknown"] += 1
+
+        total_selected = sum(counts.values())
+
+        return {
+            "disable": counts.get("disable", 0),
+            "login": counts.get("login", 0),
+            "logout": counts.get("logout", 0),
+            "unknown": counts.get("unknown", 0),
+            "total_selected": total_selected,
+            "total_all": total_all,
+        }
+
+    def _on_mass_toggle(self, running: bool, rows: list[dict], dlg) -> None:
+        if running:
+            if self._mass_task and not self._mass_task.done():
+                return
+
+            self._mass_cancel = False
+            self._mass_task = asyncio.create_task(
+                self.run_selected_accounts_queue(rows, dlg)
+            )
+        else:
+            # ❌ ОТМЕНА
+            self._mass_cancel = True
+
+            if self._mass_task and not self._mass_task.done():
+                self._mass_task.cancel()
+
+            asyncio.create_task(self._stop_all_mass_running(dlg))
+
+    async def run_selected_accounts_queue(self, rows: list[dict], dlg) -> None:
+        """
+        Массовый запуск: параллельность = кол-во прокси (capacity).
+        Ошибка в сценарии НЕ сбрасывает очередь.
+        """
+        # 1) собираем задания
+        q: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
+
+        for item in rows:
+            if self._closing:
+                break
+
+            phone10 = (item.get("phone10") or "").strip()
+            status = (item.get("status") or "").strip().lower()
+
+            mode = self._status_to_mode(status)
+            if not mode:
+                # пропускаем неизвестный статус
+                QTimer.singleShot(0, lambda p=phone10: dlg.set_row_status(p, "unknown"))
+                QTimer.singleShot(0, lambda p=phone10: dlg.set_row_progress(p, 0, "Пропуск: неизвестный статус"))
+                continue
+
+            # отметим что в очереди
+            QTimer.singleShot(0, lambda p=phone10: dlg.set_row_progress(p, 0, "В очереди…"))
+            await q.put((phone10, mode))
+
+        if q.empty():
+            return
+
+        # 2) определяем параллельность по прокси
+        capacity = await self.proxy_pool.capacity()
+        workers_n = max(1, int(capacity))
+
+        # 3) запускаем воркеров
+        workers = [asyncio.create_task(self._mass_worker(q, dlg)) for _ in range(workers_n)]
+
+        try:
+            # 4) ждём пока очередь обработается
+            try:
+                await q.join()
+            except asyncio.CancelledError:
+                # массовую задачу отменили кнопкой "Отмена"
+                pass
+        finally:
+            # 5) останавливаем воркеров
+            for w in workers:
+                w.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
+
+            if not self._closing:
+                await self.load_accounts()
+
+    async def _mass_worker(self, q: asyncio.Queue[tuple[str, str]], dlg) -> None:
+        while True:
+            phone10, mode = await q.get()
+            try:
+                if self._closing or self._mass_cancel:
+                    # если отмена — просто “съедаем” задачу и идём дальше
+                    QTimer.singleShot(0, lambda p=phone10: dlg.set_row_progress(p, 0, "Отменено"))
+                    QTimer.singleShot(0, lambda p=phone10: dlg.set_row_status(p, "cancel"))
+                    continue
+
+                # запускаем один аккаунт (внутри будет acquire/release прокси)
+                ok = await self._run_one_account_for_queue(phone10, mode, dlg)
+
+                if ok:
+                    QTimer.singleShot(0, lambda p=phone10: dlg.set_row_status(p, "done"))
+                    QTimer.singleShot(0, lambda p=phone10: dlg.set_row_progress(p, 100, "Готово"))
+                else:
+                    QTimer.singleShot(0, lambda p=phone10: dlg.set_row_status(p, "error"))
+
+            except Exception as e:
+                # даже если воркер упадёт — мы не хотим убить очередь
+                QTimer.singleShot(0, lambda p=phone10, ee=str(e): dlg.set_row_progress(p, 0, f"Worker error: {ee}"))
+                QTimer.singleShot(0, lambda p=phone10: dlg.set_row_status(p, "error"))
+            finally:
+                q.task_done()
+
+    async def _run_one_account_for_queue(self, phone10: str, mode: str, dlg) -> bool:
+        proxy_id: int | None = None
+        controller = None
+
+        try:
+            account = await self._get_account_by_phone(phone10)
+            if not account:
+                QTimer.singleShot(0, lambda: dlg.set_row_progress(phone10, 0, "Аккаунт не найден в БД"))
+                QTimer.singleShot(0, lambda: self._set_row_loading(phone10, False))
+                return False
+
+            ua = account.get("user_agent", "")
+
+            # показываем что стартуем
+            QTimer.singleShot(0, lambda: self._set_row_loading(phone10, True, "Запуск…"))
+
+            # 1) ждём свободный прокси
+            proxy, msg = await self.proxy_pool.acquire_mass(
+                rotate_total_wait_sec=120,
+                rotate_interval_sec=10,
+                rotate_wait_after_ok_sec=5,
+                require_rotate=True,
+            )
+            if not proxy:
+                QTimer.singleShot(0, lambda: dlg.set_row_progress(phone10, 0, f"Прокси: {msg}"))
+                QTimer.singleShot(0, lambda: self._set_row_loading(phone10, False))
+                return False
+
+            proxy_id = proxy.id
+            self._account_proxy[phone10] = proxy_id
+
+            # 2) прокидываем прогресс в диалог
+            def on_progress(p: int, text: str) -> None:
+                QTimer.singleShot(0, lambda: dlg.set_row_progress(phone10, p, text))
+                QTimer.singleShot(0, lambda: self._update_progress_ui(phone10, p, text))
+
+            # 3) запускаем сценарий
+            controller = BrowserController(
+                profile_name=phone10,
+                user_agent=ua,
+                proxy=proxy,
+                user=self.user,
+                on_progress=on_progress
+            )
+            controller.account = account
+            self._browser_controllers[phone10] = controller
+
+            await controller.run(mode=mode)
+            return True
+
+
+        except Exception as e:
+            err = str(e)
+            QTimer.singleShot(0, lambda p=phone10, msg=err: dlg.set_row_progress(p, 0, f"Ошибка: {msg}"))
+            return False
+
+        finally:
+            # закрыть браузер
+            try:
+                if controller:
+                    await controller.close()
+            except Exception:
+                pass
+
+            # освободить прокси
+            try:
+                if proxy_id is not None:
+                    await self.proxy_pool.release(proxy_id)
+            except Exception:
+                pass
+
+            # чистим состояние
+            self._account_proxy.pop(phone10, None)
+            self._browser_controllers.pop(phone10, None)
+            self._running_ui.pop(phone10, None)
+
+            QTimer.singleShot(0, lambda: self._set_row_loading(phone10, False))
+
+    async def _stop_all_mass_running(self, dlg) -> None:
+        # 1️⃣ закрываем все браузеры
+        for phone10, controller in list(self._browser_controllers.items()):
+            try:
+                await controller.close()
+            except Exception:
+                pass
+
+            dlg.set_row_progress(phone10, 0, "Отменено")
+            dlg.set_row_status(phone10, "cancel")
+
+        # 2️⃣ отменяем все browser tasks
+        for phone10, task in list(self._browser_tasks.items()):
+            if task and not task.done():
+                task.cancel()
+
+        # 3️⃣ освобождаем прокси
+        for phone10, proxy_id in list(self._account_proxy.items()):
+            try:
+                await self.proxy_pool.release(proxy_id)
+            except Exception:
+                pass
+
+        # 4️⃣ чистим состояние
+        self._browser_tasks.clear()
+        self._browser_controllers.clear()
+        self._account_proxy.clear()
+        self._running_ui.clear()
+
+
+
+
