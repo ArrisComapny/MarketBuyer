@@ -69,7 +69,8 @@ class BrowserController:
             self.context = await p.chromium.launch_persistent_context(
                 user_data_dir=str(self.profile_dir),
                 channel="chrome",
-                headless = False if mode == "scenario_start_process" else True,
+                # headless = False if mode == "scenario_start_process" else True,
+                headless=False,
                 proxy=proxy_cfg,
                 user_agent=self.user_agent or None,
                 locale="ru-RU",
@@ -252,10 +253,30 @@ class BrowserController:
     async def click_login_btn(self):
         phone = self.account.get("phone10")
         # 1) клик "Войти"
-        try:
-            login_btn = await self.page.wait_for_selector('[data-testid="login"]', timeout=5000)
-        except PlaywrightTimeoutError:
-            raise Exception("Кнопка 'Войти' не найдена")
+        login_btn = None
+        last_error = None
+
+        selectors = [
+            '[data-testid="login"]',
+            '[data-wba-header-name="login"]',
+            'a.navbar-pc__link:has(.navbar-pc__icon--profile)',
+            '.navbar-pc__icon--profile']
+
+        for selector in selectors:
+            try:
+                login_btn = await self.page.wait_for_selector(
+                    selector,
+                    timeout=3000,
+                    state="visible"
+                )
+                print(f"Найден элемент по селектору: {selector}")
+                break
+            except PlaywrightTimeoutError as e:
+                last_error = e
+
+        if not login_btn:
+            print("Кнопка логина / профиля не найдена ни по одному селектору")
+            raise Exception("Кнопка логина / профиля не найдена") from last_error
 
         await self.human_wait()
         await self.human_click(login_btn)
@@ -265,7 +286,7 @@ class BrowserController:
         try:
             phone_inp = await self.page.wait_for_selector(
                 "[data-testid='phoneInput']",
-                timeout=5000,
+                timeout=10000,
                 state="visible"
             )
         except PlaywrightTimeoutError:
@@ -323,6 +344,7 @@ class BrowserController:
             await self.human_click(el)
             await el.fill(ch)
 
+
         profile_selectors = [
             'a[data-testid="profile"]',
             'a[data-wba-header-name="LK"]',
@@ -376,12 +398,12 @@ class BrowserController:
 
         try:
             user_profile_btn = await self.page.wait_for_selector(
-                "h3.user-name--StaCq",
+                '[data-testid="displayName"]',
                 timeout=5000,
                 state="visible"
             )
         except PlaywrightTimeoutError:
-            print(f"Кнопка 'Профиля' не найдена")
+            print("Кнопка 'Профиля' не найдена")
             raise Exception("Кнопка 'Профиля' не найдена")
         await self.human_wait()
         await self.human_click(user_profile_btn)

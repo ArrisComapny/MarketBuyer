@@ -22,13 +22,13 @@ from gui.style import AppStyle
 from gui.widgets.account_row_actions import AccountRowActions
 from gui.widgets.filter_panel import FilterPanel
 from gui.widgets.accounts_table import AccountsTable
-from gui.all_activation import AllActivationDialog
+from gui.dialogs.all_activation import AllActivationDialog
 
 from utils.messagebox import CustomMessageBox
 from utils.phone import format_phone_ru
 
-from gui.setting_menu_bar import ProxyManagerDialog
-from gui.add_personal_account import AddAccountDialog
+from gui.dialogs.setting_menu_bar import ProxyManagerDialog
+from gui.dialogs.add_personal_account import AddAccountDialog
 
 from database.repositories import AccountRepo, UsersAccountsRepo
 
@@ -610,6 +610,7 @@ class MainWindow(QMainWindow):
 
         open_action = QAction("Открыть", self)
         save_action = QAction("Сохранить", self)
+        import_action = QAction("Импортировать", self)
         exit_action = QAction("Выход", self)
 
         settings_action = QAction("ProxyManager", self)
@@ -620,6 +621,7 @@ class MainWindow(QMainWindow):
 
         file_menu.addAction(open_action)
         file_menu.addAction(save_action)
+        file_menu.addAction(import_action)
         file_menu.addSeparator()
         file_menu.addAction(exit_action)
 

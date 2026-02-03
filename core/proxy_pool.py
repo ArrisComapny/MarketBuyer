@@ -44,13 +44,13 @@ class ProxyPool:
 
     async def acquire_mass(
             self,
-            rotate_total_wait_sec: int = 120,  # общее ожидание смены IP (на один прокси)
-            rotate_interval_sec: int = 10,  # интервал повторов смены IP
+            rotate_total_wait_sec: int = 130,  # общее ожидание смены IP (на один прокси)
+            rotate_interval_sec: int = 20,  # интервал повторов смены IP
             rotate_wait_after_ok_sec: int = 5,  # пауза после успешной смены IP
             require_rotate: bool = True,
 
-            wait_free_total_sec: int = 120,  # ✅ ждать свободный прокси до N секунд
-            wait_free_interval_sec: int = 10,  # ✅ проверка каждые N секунд
+            wait_free_total_sec: int = 130,  # ✅ ждать свободный прокси до N секунд
+            wait_free_interval_sec: int = 20,  # ✅ проверка каждые N секунд
     ) -> tuple[Proxy | None, str]:
         """
         Выдача прокси ТОЛЬКО для массовой очереди.

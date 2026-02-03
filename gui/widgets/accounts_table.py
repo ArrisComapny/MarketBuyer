@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QWidget, QTableWidget, QTableWidgetItem
 from PySide6.QtWidgets import QHBoxLayout, QCheckBox, QHeaderView, QAbstractItemView
 
 from gui.style import AppStyle
-from gui.check_box_header import CheckBoxHeader
+from gui.widgets.check_box_header import CheckBoxHeader
 from gui.widgets.account_row_actions import AccountRowActions
 
 from utils.phone import format_phone_ru
