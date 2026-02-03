@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QLineEdit, QComboBox, QSizePolicy, QFormLayout
 
 import core.app as app_core
 
+from sqlalchemy.ext.asyncio import AsyncSession
 from utils.phone import phone_to_10_digits
 from database.repositories import AccountRepo
 from utils.messagebox import CustomMessageBox
@@ -85,8 +86,6 @@ class AddAccountDialog(QDialog):
 
         main_layout.addWidget(self.btn_save)
         main_layout.addWidget(self.btn_cancel)
-
-    from sqlalchemy.ext.asyncio import AsyncSession
 
     @staticmethod
     async def _normalize_fields(session: AsyncSession,

@@ -18,11 +18,14 @@ from core.proxy_pool import ProxyPool
 from core.browser import BrowserController
 from collections import Counter
 
+
 from gui.style import AppStyle
 from gui.widgets.account_row_actions import AccountRowActions
 from gui.widgets.filter_panel import FilterPanel
 from gui.widgets.accounts_table import AccountsTable
 from gui.dialogs.all_activation import AllActivationDialog
+from gui.dialogs.import_menu_bar import ImportMenuBarDialog
+
 
 from utils.messagebox import CustomMessageBox
 from utils.phone import format_phone_ru
@@ -31,6 +34,9 @@ from gui.dialogs.setting_menu_bar import ProxyManagerDialog
 from gui.dialogs.add_personal_account import AddAccountDialog
 
 from database.repositories import AccountRepo, UsersAccountsRepo
+
+from sqlalchemy import delete
+from database.models import Account
 
 
 class MainWindow(QMainWindow):
@@ -79,6 +85,9 @@ class MainWindow(QMainWindow):
 
         self.btn_add = QPushButton("Добавить ЛК")
         self.btn_activate = QPushButton("Активировать")
+        self.btn_delete_selected = QPushButton("Удалить выбранные")
+        self.btn_delete_selected.setMinimumHeight(35)
+        self.btn_delete_selected.clicked.connect(self.delete_selected_accounts)
         self.btn_add.clicked.connect(self.add_personal_account)
         self.btn_activate.clicked.connect(self.open_all_activation)
 
@@ -89,6 +98,7 @@ class MainWindow(QMainWindow):
         top_row.addStretch()
         top_row.addWidget(self.btn_add)
         top_row.addWidget(self.btn_activate)
+        top_row.addWidget(self.btn_delete_selected)
         main_layout.addLayout(top_row)
 
         self.table = AccountsTable(self)
@@ -319,6 +329,43 @@ class MainWindow(QMainWindow):
 
         dlg.open()
 
+    def delete_selected_accounts(self) -> None:
+        rows = self.table.selected_accounts_rows()
+        if not rows:
+            CustomMessageBox.information(self, "Удаление", "Не выбрано ни одного аккаунта.")
+            return
+
+        phones = [r["phone10"] for r in rows if r.get("phone10")]
+        n = len(phones)
+
+        reply = CustomMessageBox.question(
+            self,
+            "Удаление",
+            f"Удалить выбранные аккаунты: {n} шт?\n"
+            f"Аккаунты будут удалены из базы данных без возможности восстановления.",
+            CustomMessageBox.StandardButton.Yes | CustomMessageBox.StandardButton.No,
+            CustomMessageBox.StandardButton.No
+        )
+        if reply != CustomMessageBox.StandardButton.Yes:
+            return
+
+        asyncio.create_task(self._delete_selected_async(phones))
+
+    async def _delete_selected_async(self, phones: list[str]) -> None:
+        try:
+            async with app_core.db.get_session() as session:
+                await session.execute(
+                    delete(Account).where(Account.phone.in_(phones))
+                )
+                await session.commit()
+
+        except Exception as e:
+            CustomMessageBox.critical(self, "Ошибка", f"Не удалось удалить аккаунты:\n{e}")
+            return
+
+        # ✅ обновляем таблицу (у тебя asyncSlot -> просто вызвать)
+        await self.load_accounts()
+
     async def _save_comment_async(self, phone10: str, comment: str) -> None:
         """Асинхронно сохраняет комментарий аккаунта в БД. Вызывается при изменении ячейки комментария в таблице."""
         try:
@@ -461,97 +508,6 @@ class MainWindow(QMainWindow):
 
         task.add_done_callback(_cleanup)
 
-    async def run_account_with_proxy_mass(
-            self,
-            phone10: str,
-            mode: str,
-            on_status: Callable[[str], None] | None = None,
-    ) -> None:
-        """
-        Запуск для МАССОВОЙ очереди.
-        Главное отличие: берём прокси через acquire_mass() (ожидание 10 сек / 2 мин).
-        Главную таблицу не трогаем.
-        """
-        old_task = self._browser_tasks.get(phone10)
-        if old_task and not old_task.done():
-            # для очереди обычно не надо спамить warning, но оставлю статус
-            if on_status:
-                on_status(f"{phone10}: уже запущен")
-            return
-
-        account = await self._get_account_by_phone(phone10)
-        if not account:
-            if on_status:
-                on_status(f"{phone10}: аккаунт не найден")
-            return
-
-        ua = account.get("user_agent", "")
-
-        # ✅ ВАЖНО: для очереди используем acquire_mass()
-        proxy, msg = await self.proxy_pool.acquire_mass(
-            rotate_total_wait_sec=120,
-            rotate_interval_sec=10,
-        )
-
-        if not proxy:
-            if on_status:
-                on_status(f"{phone10}: прокси не выдан — {msg}")
-            return
-
-        if on_status:
-            on_status(f"{phone10}: {msg}")
-
-        self._account_proxy[phone10] = proxy.id
-
-        def _on_progress(p: int, t: str) -> None:
-            # если хочешь — прокидывай прогресс в окно массовой активации
-            if on_status:
-                on_status(f"{phone10}: {p}% • {t}")
-            # главную таблицу не трогаем, но можно оставить обновление UI если тебе норм
-            # (если НЕ хочешь вообще трогать UI главной таблицы для массового — закомментируй строку ниже)
-            QTimer.singleShot(0, lambda: self._update_progress_ui(phone10, p, t))
-
-        controller = BrowserController(
-            profile_name=phone10,
-            user_agent=ua,
-            proxy=proxy,
-            user=self.user,
-            on_progress=_on_progress
-        )
-        controller.account = account
-        self._browser_controllers[phone10] = controller
-
-        task = asyncio.create_task(controller.run(mode=mode))
-        self._browser_tasks[phone10] = task
-
-        def _cleanup(t: asyncio.Task) -> None:
-            async def _async_cleanup() -> None:
-                err_text: str | None = None
-                try:
-                    t.result()
-                except Exception as e:
-                    err_text = str(e)
-
-                proxy_id = self._account_proxy.pop(phone10, None)
-                if proxy_id is not None:
-                    await self.proxy_pool.release(proxy_id)
-
-                if phone10 in self._browser_tasks:
-                    del self._browser_tasks[phone10]
-
-                self._browser_controllers.pop(phone10, None)
-
-                if err_text:
-                    if on_status:
-                        on_status(f"{phone10}: ошибка — {err_text}")
-                else:
-                    if on_status:
-                        on_status(f"{phone10}: готово")
-
-            asyncio.create_task(_async_cleanup())
-
-        task.add_done_callback(_cleanup)
-
     def _show_warning(self, title: str, text: str) -> None:
         """Показывает предупреждающее сообщение пользователю из безопасного Qt-контекста."""
         QTimer.singleShot(0, lambda: CustomMessageBox.warning(self, title, text))
@@ -618,6 +574,7 @@ class MainWindow(QMainWindow):
 
         exit_action.triggered.connect(self.close)
         settings_action.triggered.connect(self.open_settings)
+        import_action.triggered.connect(self.open_import_excel)  # ✅ ВАЖНО
 
         file_menu.addAction(open_action)
         file_menu.addAction(save_action)
@@ -627,6 +584,10 @@ class MainWindow(QMainWindow):
 
         settings_menu.addAction(settings_action)
         help_menu.addAction(about_action)
+
+    def open_import_excel(self) -> None:
+        dlg = ImportMenuBarDialog(self)
+        dlg.exec()
 
     def _update_progress_ui(self, phone10: str, percent: int, text: str) -> None:
         percent = max(0, min(100, int(percent)))
@@ -681,7 +642,6 @@ class MainWindow(QMainWindow):
                 self.run_selected_accounts_queue(rows, dlg)
             )
         else:
-            # ❌ ОТМЕНА
             self._mass_cancel = True
 
             if self._mass_task and not self._mass_task.done():
@@ -694,6 +654,7 @@ class MainWindow(QMainWindow):
         Массовый запуск: параллельность = кол-во прокси (capacity).
         Ошибка в сценарии НЕ сбрасывает очередь.
         """
+
         # 1) собираем задания
         q: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
 
@@ -785,9 +746,9 @@ class MainWindow(QMainWindow):
 
             # 1) ждём свободный прокси
             proxy, msg = await self.proxy_pool.acquire_mass(
-                rotate_total_wait_sec=120,
-                rotate_interval_sec=10,
-                rotate_wait_after_ok_sec=5,
+                rotate_total_wait_sec=130,
+                rotate_interval_sec=20,
+                rotate_wait_after_ok_sec=10,
                 require_rotate=True,
             )
             if not proxy:
