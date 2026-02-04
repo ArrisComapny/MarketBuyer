@@ -240,12 +240,12 @@ class ImportMenuBarDialog(QDialog):
             self.btn_import.setEnabled(True)
 
             self.lbl_info.setText(
-                f"Импорт завершён | "
-                f"добавлено: {added_ok} | "
-                f"битых: {skipped_bad} | "
-                f"дублей в файле: {skipped_dupfile} | "
-                f"уже есть: {skipped_exists} | "
-                f"ошибок: {failed_other}"
+                f"Добавлено: {added_ok}\n "
+                f"Битых: {skipped_bad}\n "
+                f"Дублей в файле: {skipped_dupfile}\n "
+                f"Уже есть: {skipped_exists}\n "
+                f"ошибок: {failed_other}\n"
+                f"Импорт завершён"
             )
 
 
