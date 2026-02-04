@@ -69,8 +69,8 @@ class BrowserController:
             self.context = await p.chromium.launch_persistent_context(
                 user_data_dir=str(self.profile_dir),
                 channel="chrome",
-                # headless = False if mode == "scenario_start_process" else True,
-                headless=False,
+                headless = False if mode == "scenario_start_process" else True,
+                # headless=True,
                 proxy=proxy_cfg,
                 user_agent=self.user_agent or None,
                 locale="ru-RU",
