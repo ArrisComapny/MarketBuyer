@@ -11,22 +11,22 @@ from core.app import init_application, DBConnectionError
 
 login_window: LoginWindow | None = None
 
-def apply_fixed_theme(app: QApplication) -> None:
-    app.setStyle("Fusion")
+def apply_fixed_theme(application: QApplication) -> None:
+    application.setStyle("Fusion")
 
     palette = QPalette()
-    palette.setColor(QPalette.Window, QColor(30, 30, 30))
-    palette.setColor(QPalette.WindowText, Qt.white)
-    palette.setColor(QPalette.Base, QColor(25, 25, 25))
-    palette.setColor(QPalette.AlternateBase, QColor(35, 35, 35))
-    palette.setColor(QPalette.Text, Qt.white)
-    palette.setColor(QPalette.Button, QColor(45, 45, 45))
-    palette.setColor(QPalette.ButtonText, Qt.white)
-    palette.setColor(QPalette.Highlight, QColor(255, 105, 180))
-    palette.setColor(QPalette.HighlightedText, Qt.black)
-    app.setPalette(palette)
+    palette.setColor(QPalette.ColorRole.Window, QColor(30, 30, 30))
+    palette.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.white)
+    palette.setColor(QPalette.ColorRole.Base, QColor(25, 25, 25))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(35, 35, 35))
+    palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.white)
+    palette.setColor(QPalette.ColorRole.Button, QColor(45, 45, 45))
+    palette.setColor(QPalette.ColorRole.ButtonText, Qt.GlobalColor.white)
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(255, 105, 180))
+    palette.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.black)
+    application.setPalette(palette)
 
-    app.setStyleSheet("""
+    application.setStyleSheet("""
     QHeaderView::section {
         background-color: #333;
         color: white;

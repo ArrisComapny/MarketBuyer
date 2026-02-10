@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+
 from typing import Callable, Awaitable
 
-from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QPushButton,
-    QTableWidget, QTableWidgetItem, QHeaderView, QWidget,
-)
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import QTableWidgetItem, QHeaderView, QWidget
+from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QPushButton, QTableWidget
+
+from core.scenarios.modes import ScenarioMode
 
 
 class AllActivationDialog(QDialog):
@@ -26,10 +27,10 @@ class AllActivationDialog(QDialog):
         counts: dict[str, int] | None = None,
         *,
         proxy_pool,
-        status_to_mode: Callable[[str], str | None],
+        status_to_mode: Callable[[str], ScenarioMode | None],
         load_accounts: Callable[[], Awaitable[None]],
         is_closing: Callable[[], bool],
-        run_one_for_queue: Callable[[str, str, "AllActivationDialog"], Awaitable[dict]],
+        run_one_for_queue: Callable[[str, ScenarioMode, "AllActivationDialog"], Awaitable[dict]],
         delete_account_cache_async: Callable[[str], Awaitable[None]],
 
         # ссылки на состояния MainWindow (используются в stop/cleanup)
@@ -261,7 +262,7 @@ class AllActivationDialog(QDialog):
         relogin_login = bool(self.cb_login.isChecked())
 
         # 1) собираем задания
-        q: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
+        q: asyncio.Queue[tuple[str, ScenarioMode]] = asyncio.Queue()
 
         for item in rows:
             if self._is_closing():
@@ -287,7 +288,7 @@ class AllActivationDialog(QDialog):
                     continue
 
                 # после удаления кэша статус становится logout, значит режим = logout-login
-                mode = "logout-login"
+                mode = ScenarioMode.LOGOUT_LOGIN
                 QTimer.singleShot(0, lambda p=phone10: self.set_row_exec(p, "В очереди"))
                 await q.put((phone10, mode))
                 continue
@@ -327,8 +328,8 @@ class AllActivationDialog(QDialog):
 
             QTimer.singleShot(0, self._on_mass_finished)
 
-    async def _mass_worker(self, q: asyncio.Queue[tuple[str, str]]) -> None:
-        retries: dict[tuple[str, str], int] = {}
+    async def _mass_worker(self, q: asyncio.Queue[tuple[str, ScenarioMode]]) -> None:
+        retries: dict[tuple[str, ScenarioMode], int] = {}
 
         while True:
             phone10, mode = await q.get()

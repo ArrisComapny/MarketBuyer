@@ -2,7 +2,9 @@ import os
 import stat
 import shutil
 import asyncio
+import core.app as app_core
 
+from collections import Counter
 from types import TracebackType
 from typing import Callable, Type
 
@@ -11,34 +13,27 @@ from PySide6.QtGui import QAction
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMenu, QCheckBox
 
-import core.app as app_core
-
 from config import PROFILE_DIR
+
 from core.proxy_pool import ProxyPool
 from core.browser import BrowserController
-from collections import Counter
-
+from core.scenarios.modes import ScenarioMode
 
 from gui.style import AppStyle
-from gui.widgets.account_row_actions import AccountRowActions
+from gui.dialogs.open_qr import OpenQrDialog
 from gui.widgets.filter_panel import FilterPanel
 from gui.widgets.accounts_table import AccountsTable
 from gui.dialogs.all_activation import AllActivationDialog
 from gui.dialogs.import_menu_bar import ImportMenuBarDialog
+from gui.widgets.account_row_actions import AccountRowActions
 
-
-from utils.messagebox import CustomMessageBox
 from utils.phone import format_phone_ru
+from utils.messagebox import CustomMessageBox
 
 from gui.dialogs.setting_menu_bar import ProxyManagerDialog
 from gui.dialogs.add_personal_account import AddAccountDialog
 
 from database.repositories import AccountRepo, UsersAccountsRepo
-
-from sqlalchemy import delete
-from database.models import Account
-
-from gui.dialogs.open_qr import OpenQrDialog
 
 
 class MainWindow(QMainWindow):
@@ -124,21 +119,21 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self.load_accounts)
 
     @staticmethod
-    def _mode_to_loading_text(mode: str) -> str:
+    def _mode_to_loading_text(mode: ScenarioMode) -> str:
         """Возвращает текст кнопки для состояния загрузки в зависимости от режима запуска сценария."""
         return {
-            "activate": "Активируется…",
-            "scenario_start_process": "Запускается…",
-            "logout-login": "Входит…",
+            ScenarioMode.ACTIVATE: "Активируется…",
+            ScenarioMode.START_PROCESS: "Запускается…",
+            ScenarioMode.LOGOUT_LOGIN: "Входит…",
         }.get(mode, "Запускается…")
 
     @staticmethod
-    def _status_to_mode(status: str) -> str | None:
+    def _status_to_mode(status: str) -> ScenarioMode | None:
         """Преобразует статус аккаунта из таблицы в режим запуска сценария."""
         return {
-            "disable": "activate",
-            "login": "scenario_start_process",
-            "logout": "logout-login",
+            "disable": ScenarioMode.ACTIVATE,
+            "login": ScenarioMode.START_PROCESS,
+            "logout": ScenarioMode.LOGOUT_LOGIN,
         }.get(status)
 
     @staticmethod
@@ -380,16 +375,12 @@ class MainWindow(QMainWindow):
     async def _delete_selected_async(self, phones: list[str]) -> None:
         try:
             async with app_core.db.get_session() as session:
-                await session.execute(
-                    delete(Account).where(Account.phone.in_(phones))
-                )
-                await session.commit()
+                await AccountRepo.delete_selected_accounts(session, phones)
 
         except Exception as e:
             CustomMessageBox.critical(self, "Ошибка", f"Не удалось удалить аккаунты:\n{e}")
             return
 
-        # ✅ обновляем таблицу (у тебя asyncSlot -> просто вызвать)
         await self.load_accounts()
 
     async def _save_comment_async(self, phone10: str, comment: str) -> None:
@@ -444,7 +435,7 @@ class MainWindow(QMainWindow):
             async def _flow():
                 await self.delete_account_cache_async(phone10)
                 self._set_row_loading(phone10, True, "Входит…")
-                await self.run_account_with_proxy(phone10, mode="logout-login")
+                await self.run_account_with_proxy(phone10, mode=ScenarioMode.LOGOUT_LOGIN)
 
             asyncio.create_task(_flow())
 
@@ -457,7 +448,7 @@ class MainWindow(QMainWindow):
 
         self._more_menu.exec(btn_more.mapToGlobal(btn_more.rect().bottomLeft()))
 
-    async def run_account_with_proxy(self, phone10: str, mode: str) -> None:
+    async def run_account_with_proxy(self, phone10: str, mode: ScenarioMode) -> None:
         """Запускает браузерный сценарий для аккаунта с выделением прокси и контролем жизненного цикла."""
         old_task = self._browser_tasks.get(phone10)
         if old_task and not old_task.done():
@@ -660,7 +651,7 @@ class MainWindow(QMainWindow):
         }
 
 
-    async def _run_one_account_for_queue(self, phone10: str, mode: str, dlg) -> dict:
+    async def _run_one_account_for_queue(self, phone10: str, mode: ScenarioMode, dlg) -> dict:
         """
         Возвращает:
           {"ok": True}
@@ -751,8 +742,3 @@ class MainWindow(QMainWindow):
             self._running_ui.pop(phone10, None)
 
             QTimer.singleShot(0, lambda: self._set_row_loading(phone10, False))
-
-
-
-
-

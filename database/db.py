@@ -43,14 +43,12 @@ class Database:
 
     async def init_models(self, base: type[Base]) -> None:
         """Создаёт таблицы (base.metadata.create_all), если их ещё нет."""
-
         async with self.engine.begin() as conn:
             await conn.run_sync(base.metadata.create_all)
 
     @asynccontextmanager
     async def get_session(self) -> AsyncIterator[AsyncSession]:
         """Контекст-менеджер для безопасной работы с сессией."""
-
         async with self.session_factory() as session:
             try:
                 yield session
@@ -61,7 +59,6 @@ class Database:
 
     async def test_connection(self) -> bool:
         """Проверка соединения с БД."""
-
         try:
             async with self.engine.connect() as conn:
                 await conn.execute(text("SELECT 1"))

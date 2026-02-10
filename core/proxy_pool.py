@@ -14,14 +14,16 @@ class ProxyPool:
         self._busy: set[int] = set()
         self._capacity_cache: int | None = None
 
-    async def _load_proxies(self) -> list[Proxy]:
+    @staticmethod
+    async def _load_proxies() -> list[Proxy]:
         async with Database().get_session() as session:
             res = await session.execute(
                 select(Proxy).order_by(Proxy.id.asc())
             )
             return res.scalars().all()
 
-    async def _change_ip(self, proxy: Proxy) -> tuple[bool, str]:
+    @staticmethod
+    async def _change_ip(proxy: Proxy) -> tuple[bool, str]:
         url = (proxy.change_ip_url or "").strip()
         if not url:
             return True, "change_ip_url пустой — смена IP пропущена"

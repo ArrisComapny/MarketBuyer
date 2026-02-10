@@ -4,8 +4,8 @@ import asyncio
 import datetime
 from typing import Sequence
 
-from sqlalchemy import select, update, delete, insert, desc, distinct, Row
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update, delete, insert, desc, distinct, Row
 
 from database.models import Account, UsersAccounts, PhoneCode, User, Proxy
 
@@ -13,20 +13,16 @@ from database.models import Account, UsersAccounts, PhoneCode, User, Proxy
 class UserRepo:
     @staticmethod
     async def get_active_user(session, login: str, password: str):
-        stmt = select(User).where(
-            User.login == login,
-            User.password == password,
-            User.status.is_(True),
+        res = await session.execute(
+            select(User).where(User.login == login, User.password == password, User.status.is_(True))
         )
-        res = await session.execute(stmt)
         return res.scalar_one_or_none()
 
 
 class ProxyRepo:
     @staticmethod
     async def get_proxies(session: AsyncSession) -> Sequence[Proxy]:
-        stmt = select(Proxy).order_by(Proxy.id.desc())
-        res = await session.execute(stmt)
+        res = await session.execute(select(Proxy).order_by(Proxy.id.desc()))
         return res.scalars().all()
 
     @staticmethod
@@ -63,39 +59,31 @@ class ProxyRepo:
 class AccountRepo:
     @staticmethod
     async def get_used_user_agents(session: AsyncSession) -> list[str]:
-        stmt = select(distinct(Account.user_agent)).where(
-            Account.user_agent.isnot(None),
-            Account.user_agent != "",
+        res = await session.execute(
+            select(distinct(Account.user_agent))
+            .where(Account.user_agent.isnot(None), Account.user_agent != "")
         )
-        res = await session.execute(stmt)
         return list(res.scalars().all())
 
     @staticmethod
     async def get_used_names(session: AsyncSession) -> list[str]:
-        stmt = select(distinct(Account.name)).where(
-            Account.name.isnot(None),
-            Account.name != "",
+        res = await session.execute(
+            select(distinct(Account.name)).where(Account.name.isnot(None), Account.name != "")
         )
-        res = await session.execute(stmt)
         return list(res.scalars().all())
 
     @staticmethod
     async def get_list_accounts(session: AsyncSession) -> Sequence[Row[tuple[str, str | None, str | None]]]:
-        stmt = select(Account.phone, Account.comment, Account.status).order_by(Account.phone.desc())
-        res = await session.execute(stmt)
+        res = await session.execute(
+            select(Account.phone, Account.comment, Account.status).order_by(Account.phone.desc())
+        )
         return res.all()
 
     @staticmethod
     async def get_account_dict(session: AsyncSession, phone10: str) -> dict | None:
         res = await session.execute(
-            select(
-                Account.phone,
-                Account.name,
-                Account.male,
-                Account.user_agent,
-                Account.comment,
-                Account.status,
-            ).where(Account.phone == phone10)
+            select(Account.phone, Account.name, Account.male, Account.user_agent, Account.comment, Account.status)
+            .where(Account.phone == phone10)
         )
         row = res.first()
         if not row:
@@ -118,13 +106,7 @@ class AccountRepo:
                           gender: str,
                           user_agent: str,
                           comment: str) -> None:
-        acc = Account(
-            phone=phone10,
-            name=name,
-            male=gender,
-            user_agent=user_agent,
-            comment=comment
-        )
+        acc = Account(phone=phone10, name=name, male=gender, user_agent=user_agent, comment=comment)
         session.add(acc)
 
     @staticmethod
@@ -138,18 +120,16 @@ class AccountRepo:
         await session.execute(
             update(Account)
             .where(Account.phone == old_phone10)
-            .values(
-                phone=phone10,
-                name=name,
-                male=gender,
-                user_agent=user_agent,
-                comment=comment,
-            )
+            .values(phone=phone10, name=name, male=gender, user_agent=user_agent, comment=comment)
         )
 
     @staticmethod
-    async def delete_account_by_phone(session: AsyncSession, phone10: str) -> None:
-        await session.execute(delete(Account).where(Account.phone == phone10))
+    async def update_profile(session: AsyncSession, phone10: str, name: str, gender: str | None) -> None:
+        await session.execute(
+            update(Account)
+            .where(Account.phone == phone10)
+            .values(name=name, male=gender.capitalize())
+        )
 
     @staticmethod
     async def set_comment(session: AsyncSession, phone10: str, comment: str) -> None:
@@ -157,73 +137,54 @@ class AccountRepo:
 
     @staticmethod
     async def set_status(session: AsyncSession, phone10: str, status: str) -> None:
-        await session.execute(
-            update(Account).where(Account.phone == phone10).values(status=status)
-        )
-#
-#     @staticmethod
-#     async def update_profile(session: AsyncSession, phone10: str, name: str, gender: str | None) -> None:
-#         await session.execute(
-#             update(Account)
-#             .where(Account.phone == phone10)
-#             .values(name=name, male=(gender or "").capitalize())
-#         )
-#
-#     @staticmethod
-#     async def delete_account(session: AsyncSession, phone10: str) -> None:
-#         await session.execute(delete(Account).where(Account.phone == phone10))
-#
+        await session.execute(update(Account).where(Account.phone == phone10).values(status=status))
+
+    @staticmethod
+    async def delete_account_by_phone(session: AsyncSession, phone10: str) -> None:
+        await session.execute(delete(Account).where(Account.phone == phone10))
+
+    @staticmethod
+    async def delete_selected_accounts(session: AsyncSession, phones: list[str]) -> None:
+        await session.execute(delete(Account).where(Account.phone.in_(phones)))
+
 
 class UsersAccountsRepo:
-    # @staticmethod
-    # async def upsert_link(session: AsyncSession, phone10: str, user_login: str) -> None:
-    #     res = await session.execute(select(UsersAccounts).where(UsersAccounts.phone == phone10))
-    #     row = res.scalars().first()
-    #
-    #     if row is None:
-    #         await session.execute(
-    #             insert(UsersAccounts).values(phone=phone10, user=user_login)
-    #         )
-    #     else:
-    #         await session.execute(
-    #             update(UsersAccounts)
-    #             .where(UsersAccounts.phone == phone10)
-    #             .values(user=user_login)
-    #         )
+    @staticmethod
+    async def set_users_accounts(session: AsyncSession, phone10: str, login: str) -> None:
+        res = await session.execute(select(UsersAccounts).where(UsersAccounts.phone == phone10))
+        row = res.scalars().first()
+
+        if row is None:
+            await session.execute(insert(UsersAccounts).values(phone=phone10, user=login))
+        else:
+            await session.execute(update(UsersAccounts).where(UsersAccounts.phone == phone10).values(user=login))
 
     @staticmethod
     async def delete_link(session: AsyncSession, phone10: str, user_login: str) -> None:
         await session.execute(
-            delete(UsersAccounts).where(
-                UsersAccounts.phone == phone10,
-                UsersAccounts.user == user_login,
-            )
+            delete(UsersAccounts).where(UsersAccounts.phone == phone10, UsersAccounts.user == user_login)
         )
 
 
 class PhoneCodeRepo:
     @staticmethod
-    async def wait_latest_code(
-            session: AsyncSession,
-            phone10: str,
-            *,
-            not_older_than_sec: int = 60,
-            retries: int = 20,
-            sleep_sec: int = 5,
-            tz_offset_hours: int = 3,  # как у тебя MSK
-    ) -> str:
+    async def wait_latest_code(session: AsyncSession,
+                               phone10: str,
+                               not_older_than_sec: int = 60,
+                               retries: int = 20,
+                               sleep_sec: int = 5,
+                               tz_offset_hours: int = 3) -> str:
         msk = datetime.timezone(datetime.timedelta(hours=tz_offset_hours))
         time_request_aware = datetime.datetime.now(msk) - datetime.timedelta(seconds=not_older_than_sec)
         time_request = time_request_aware.replace(tzinfo=None)
 
         for _ in range(retries):
-            stmt = (
+            result = await session.execute(
                 select(PhoneCode.code)
                 .where(PhoneCode.phone == phone10, PhoneCode.time_response >= time_request)
                 .order_by(desc(PhoneCode.time_response))
                 .limit(1)
             )
-            result = await session.execute(stmt)
             code = result.scalars().first()
             if code:
                 return code
