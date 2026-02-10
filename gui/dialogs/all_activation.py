@@ -305,8 +305,9 @@ class AllActivationDialog(QDialog):
             return
 
         # 2) параллельность по прокси
+        max_parallel = 10  # максимум одновременных аккаунтов
         capacity = await self.proxy_pool.capacity()
-        workers_n = max(1, int(capacity))
+        workers_n = min(max_parallel, capacity)
 
         # 3) воркеры
         workers = [asyncio.create_task(self._mass_worker(q)) for _ in range(workers_n)]

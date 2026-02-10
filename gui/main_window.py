@@ -38,11 +38,14 @@ from database.repositories import AccountRepo, UsersAccountsRepo
 from sqlalchemy import delete
 from database.models import Account
 
+from gui.dialogs.open_qr import OpenQrDialog
+
 
 class MainWindow(QMainWindow):
     def __init__(self, user) -> None:
         """Главное окно приложения."""
         super().__init__()
+        self.setWindowIcon(AppStyle.icon("app"))
         self.user = user
 
         self.setWindowTitle(f"MarketBuyer – {user.login}")
@@ -82,11 +85,15 @@ class MainWindow(QMainWindow):
 
         self.btn_add = QPushButton("Добавить ЛК")
         self.btn_activate = QPushButton("Активировать")
+        self.btn_qr = QPushButton("Забрать QR")
         self.btn_delete_selected = QPushButton("Удалить выбранные")
         self.btn_delete_selected.setMinimumHeight(35)
-        self.btn_delete_selected.clicked.connect(self.delete_selected_accounts)
+        self.btn_qr.setMinimumHeight(35)
         self.btn_add.clicked.connect(self.add_personal_account)
         self.btn_activate.clicked.connect(self.open_all_activation)
+        self.btn_qr.clicked.connect(self.open_qr_dialog)
+        self.btn_delete_selected.clicked.connect(self.delete_selected_accounts)
+
 
         for b in (self.btn_add, self.btn_activate):
             b.setMinimumHeight(35)
@@ -95,6 +102,7 @@ class MainWindow(QMainWindow):
         top_row.addStretch()
         top_row.addWidget(self.btn_add)
         top_row.addWidget(self.btn_activate)
+        top_row.addWidget(self.btn_qr)
         top_row.addWidget(self.btn_delete_selected)
         main_layout.addLayout(top_row)
 
@@ -357,6 +365,17 @@ class MainWindow(QMainWindow):
             return
 
         asyncio.create_task(self._delete_selected_async(phones))
+
+    def open_qr_dialog(self):
+        rows = self.table.selected_accounts_rows()
+        if not rows:
+            CustomMessageBox.information(self, "QR", "Не выбрано ни одного аккаунта.")
+            return
+
+        counts = self._selected_status_counts()  # у тебя уже есть, раз AllActivation работает
+        dlg = OpenQrDialog(parent=self, counts=counts)
+        dlg.set_selected_accounts(rows)
+        dlg.open()
 
     async def _delete_selected_async(self, phones: list[str]) -> None:
         try:

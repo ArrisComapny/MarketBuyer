@@ -1,8 +1,6 @@
 import asyncio
 import random
 import subprocess
-from pathlib import Path
-import os
 import sys
 import datetime
 
@@ -12,7 +10,7 @@ import core.app as app_core
 from playwright.async_api import async_playwright
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from typing import Callable, Optional
-
+from config import PROFILE_DIR
 
 from sqlalchemy import select, desc, update, insert
 
@@ -21,21 +19,27 @@ from database.models import PhoneCode, Account, UsersAccounts, User
 
 
 
-def ensure_browsers():
+def ensure_browsers() -> None:
+    """
+    Устанавливает браузеры Playwright ТОЛЬКО в dev-режиме.
+    В собранном exe ничего не делаем, иначе exe запустит сам себя.
+    """
+    if getattr(sys, "frozen", False):
+        # мы в PyInstaller exe — ничего не делаем
+        return
+
     subprocess.run(
-        [sys.executable, "-m", "playwright", "install"],
+        [sys.executable, "-m", "playwright", "install", "chromium"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         check=False,
     )
-ensure_browsers()
 
 
 class BrowserController:
     def __init__(self, user: User, profile_name: str, user_agent: str = "", proxy=None,
                  on_progress: Optional[Callable[[int, str], None]] = None):
-
-        self.profile_dir = Path(os.getcwd()) / "profiles" / profile_name
+        self.profile_dir = PROFILE_DIR / profile_name
         self.profile_dir.mkdir(parents=True, exist_ok=True)
         self.on_progress = on_progress
 
@@ -505,6 +509,8 @@ class BrowserController:
         await self.context.wait_for_event("close", timeout=0)
 
 
+
+
     async def scenario_logout(self,phone10):
         print("[SCENARIO] login - Авторизация")
         self.on_progress(5, "Открываю сайт…")
@@ -522,6 +528,8 @@ class BrowserController:
         await self._update_account_status(phone10, "login")
         self.on_progress(100, "Готово")
         await self.close()
+
+
 
 
 
