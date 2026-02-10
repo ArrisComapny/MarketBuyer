@@ -1,36 +1,52 @@
-from __future__ import annotations
-
-from pathlib import Path
 from dataclasses import dataclass
-
+from pathlib import Path
+import sys
 from PySide6.QtGui import QIcon
+
+
+def resource_path(rel_path: str) -> Path:
+    """
+    Универсальный путь к ресурсам:
+    - DEV: путь от main.py
+    - PyInstaller onedir / onefile: путь от _MEIPASS
+    """
+    # PyInstaller
+    if hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS) / rel_path
+
+    # Обычный запуск (python main.py)
+    base = Path(sys.argv[0]).resolve().parent
+    return base / rel_path
 
 
 @dataclass(frozen=True)
 class AppStyle:
     """Централизованные стили (QSS) и иконки проекта."""
 
-    ICON_DIR: Path = Path("templates/icons")
-
     # --- Карта иконок (ключ -> файл) ---
     ICONS = {
-        "filter": "filter.png",
-        "find": "find.png",
-        "setting": "setting.png",
-        "delete": "delete.png",
-        "more_setting": "more_setting.png",
-        "login": "login.png",
+        "filter": "filter.ico",
+        "find": "find.ico",
+        "setting": "setting.ico",
+        "delete": "delete.ico",
+        "more_setting": "more_setting.ico",
+        "login": "login.ico",
+        "app": "app.ico",
     }
 
     # ---------------- Icons ----------------
 
     @classmethod
     def icon_path(cls, key: str) -> str:
-        """Возвращает путь к файлу иконки по ключу."""
+        """
+        Возвращает абсолютный путь к иконке.
+        Работает и в dev, и в PyInstaller.
+        """
         filename = cls.ICONS.get(key)
         if not filename:
-            raise KeyError(f"Unknown icon key: {key!r}. Add it to AppStyle.ICONS")
-        return str(cls.ICON_DIR / filename)
+            raise KeyError(f"Unknown icon key: {key!r}")
+
+        return str(resource_path(f"templates/icons/{filename}"))
 
     @classmethod
     def icon(cls, key: str) -> QIcon:
@@ -41,7 +57,6 @@ class AppStyle:
 
     @staticmethod
     def qss_icon_btn() -> str:
-        """QSS для иконок-кнопок (setting/delete/more)."""
         return """
         QPushButton {
             border: none;
@@ -55,7 +70,6 @@ class AppStyle:
 
     @staticmethod
     def qss_run_btn() -> str:
-        """QSS для run-кнопки (обычное состояние)."""
         return """
         QPushButton {
             border: 1px solid white;
@@ -69,7 +83,6 @@ class AppStyle:
 
     @staticmethod
     def qss_run_btn_disabled() -> str:
-        """QSS для run-кнопки (disabled/processing)."""
         return """
         QPushButton {
             border: 1px solid #888;
@@ -80,7 +93,6 @@ class AppStyle:
 
     @staticmethod
     def qss_menu_bar() -> str:
-        """QSS для меню-бара (линия снизу)."""
         return """
         QMenuBar {
             border-bottom: 1px solid #d0d0d0;
@@ -89,12 +101,10 @@ class AppStyle:
 
     @staticmethod
     def qss_checkbox_spacing(spacing_px: int = 14) -> str:
-        """QSS для чекбокса со spacing."""
         return f"QCheckBox {{ spacing: {spacing_px}px; }}"
 
     @staticmethod
     def qss_btn_disabled_dark() -> str:
-        """QSS: disabled-кнопка (как в LoginWindow)."""
         return """
         QPushButton:disabled {
             background-color: #2d2d2d;

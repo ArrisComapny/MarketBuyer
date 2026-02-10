@@ -15,7 +15,6 @@ from core.settings import save_settings, load_settings
 class LoginWindow(QWidget):
     def __init__(self) -> None:
         super().__init__()
-
         self.main = None
         self.width = 300
         self.height = 130

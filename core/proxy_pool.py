@@ -30,9 +30,10 @@ class ProxyPool:
             async with aiohttp.ClientSession() as http:
                 async with http.get(
                     url,
-                    timeout=aiohttp.ClientTimeout(total=30)
+                    timeout=aiohttp.ClientTimeout(total=30),
+                    ssl=False,
                 ) as r:
-                    if r.status == 200:
+                    if r.status != 400:
                         return True, "IP сменён"
                     return False, f"Смена IP не удалась (HTTP {r.status})"
         except Exception as e:
