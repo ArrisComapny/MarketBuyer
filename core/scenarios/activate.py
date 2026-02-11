@@ -12,6 +12,7 @@ class ActivateScenario(BaseScenario):
     mode = ScenarioMode.ACTIVATE
 
     async def run(self) -> None:
+
         c = self.c
         print("[SCENARIO] activate")
 

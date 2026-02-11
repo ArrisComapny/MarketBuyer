@@ -288,7 +288,7 @@ class AllActivationDialog(QDialog):
                     continue
 
                 # после удаления кэша статус становится logout, значит режим = logout-login
-                mode = ScenarioMode.LOGOUT_LOGIN
+                mode = ScenarioMode.LOGIN
                 QTimer.singleShot(0, lambda p=phone10: self.set_row_exec(p, "В очереди"))
                 await q.put((phone10, mode))
                 continue
