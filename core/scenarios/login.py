@@ -7,8 +7,8 @@ from .base import BaseScenario
 from .modes import ScenarioMode
 
 
-class LogoutLoginScenario(BaseScenario):
-    mode = ScenarioMode.LOGOUT_LOGIN
+class LoginScenario(BaseScenario):
+    mode = ScenarioMode.LOGIN
 
     async def run(self) -> None:
         c = self.c

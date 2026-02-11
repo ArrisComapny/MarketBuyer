@@ -1,15 +1,23 @@
 from __future__ import annotations
 
+import asyncio
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QTableWidget, QTableWidgetItem, QHeaderView, QWidget,
+    QTableWidget, QTableWidgetItem, QHeaderView, QWidget, QFileDialog
 )
 from PySide6.QtCore import Qt
 
+from core.scenarios.modes import ScenarioMode
+
+from pathlib import Path
+import zipfile
+from core.scenarios.get_qr import save_mass_results_to_excel
 
 class OpenQrDialog(QDialog):
-    def __init__(self, parent=None, counts: dict[str, int] | None = None):
+    def __init__(self,parent=None,counts: dict[str, int] | None = None,*,run_one_for_queue,):
+
         super().__init__(parent)
+        self._run_one_for_queue = run_one_for_queue
 
         counts = counts or {}
         total_all = int(counts.get("total_all", 0))
@@ -98,6 +106,9 @@ class OpenQrDialog(QDialog):
         bottom.addStretch()
         root.addLayout(bottom)
 
+        self._export_dir: str | None = None
+        self._all_results: list[dict] = []
+
     # ===== API как в AllActivationDialog =====
     def set_selected_accounts(self, rows: list[dict]) -> None:
         """
@@ -149,6 +160,77 @@ class OpenQrDialog(QDialog):
 
     # ===== button =====
     def on_start_clicked(self) -> None:
-        # тут позже будет логика “забрать QR”
-        # сейчас просто закрываем окно как заглушку
-        self.accept()
+        export_dir = self._ask_export_directory()
+        if not export_dir:
+            return
+
+        self._export_dir = export_dir
+        self._all_results = []
+
+        asyncio.create_task(self._run_qr_for_selected())
+
+    async def _run_qr_for_selected(self) -> None:
+        if not self._export_dir:
+            return
+
+        for item in self._rows:
+            phone10 = item.get("phone10")
+            if not phone10:
+                continue
+
+            self.set_row_result(phone10, "Запуск…")
+
+            result = await self._run_one_for_queue(
+                phone10,
+                ScenarioMode.QRCODE,
+                self
+            )
+
+            if result.get("ok"):
+                # ВАЖНО: _run_one_for_queue должен вернуть данные сценария
+                payload = result.get("data")  # <-- если у тебя ключ другой, поменяй
+                if payload:
+                    self._all_results.append(payload)
+
+                self.set_row_result(phone10, "QR получен")
+                self.set_row_progress(phone10, 100, "Готово")
+            else:
+                msg = result.get("msg", "Ошибка")
+                self.set_row_result(phone10, "Ошибка")
+                self.set_row_progress(phone10, 0, msg)
+
+        # ===== ПОСЛЕ ЦИКЛА ПО АККАУНТАМ =====
+
+        export_dir = Path(self._export_dir)
+        export_dir.mkdir(parents=True, exist_ok=True)
+
+        xlsx_path = export_dir / "qr_export.xlsx"
+
+        # 1) сохранить Excel + картинки
+        save_mass_results_to_excel(str(xlsx_path), self._all_results)
+
+        try:
+            zip_path = self._make_zip(export_dir)  # ✅ self обязательно
+            print("ZIP создан:", zip_path)
+        except Exception as e:
+            print("ОШИБКА ZIP:", repr(e))
+
+    def _ask_export_directory(self) -> str | None:
+        dir_path = QFileDialog.getExistingDirectory(
+            self,
+            "Выберите папку для сохранения QR",
+            "",
+            QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks
+        )
+        return dir_path or None
+
+    def _make_zip(self, export_dir: Path) -> str:
+        zip_path = export_dir / "qr_export.zip"
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for f in export_dir.rglob("*"):
+                if f.is_file():
+                    if f.resolve() == zip_path.resolve():
+                        continue  # ✅ не добавляем zip в самого себя
+                    zf.write(f, f.relative_to(export_dir))
+        return str(zip_path)
+

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from .activate import ActivateScenario
-from .logout_login import LogoutLoginScenario
-from .start_process import StartProcessScenario
+from .login import LoginScenario
+from .start import StartProcessScenario
 
 SCENARIOS = {
     ActivateScenario.mode: ActivateScenario,
-    LogoutLoginScenario.mode: LogoutLoginScenario,
+    LoginScenario.mode: LoginScenario,
     StartProcessScenario.mode: StartProcessScenario,
 }

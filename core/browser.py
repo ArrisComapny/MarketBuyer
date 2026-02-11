@@ -11,8 +11,9 @@ from config import PROFILE_DIR
 
 from core.scenarios.modes import ScenarioMode
 from core.scenarios.activate import ActivateScenario
-from core.scenarios.logout_login import LogoutLoginScenario
-from core.scenarios.start_process import StartProcessScenario
+from core.scenarios.login import LoginScenario
+from core.scenarios.start import StartProcessScenario
+from core.scenarios.get_qr import QRcodeScenario
 
 from database.models import User
 from database.repositories import PhoneCodeRepo
@@ -20,14 +21,16 @@ from database.repositories import PhoneCodeRepo
 
 SCENARIOS = {
     ActivateScenario.mode: ActivateScenario,
-    LogoutLoginScenario.mode: LogoutLoginScenario,
+    LoginScenario.mode: LoginScenario,
     StartProcessScenario.mode: StartProcessScenario,
+    QRcodeScenario.mode: QRcodeScenario,
 }
 
 HEADLESS = {
     ActivateScenario.mode: True,
-    LogoutLoginScenario.mode: True,
+    LoginScenario.mode: True,
     StartProcessScenario.mode: False,
+    QRcodeScenario.mode: False,
 }
 
 class BrowserController:
@@ -73,7 +76,7 @@ class BrowserController:
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--disable-infobars",
-                "--window-size=1280,800",
+                "--window-size=1280,1200",
             ],
         )
 
@@ -82,6 +85,17 @@ class BrowserController:
 
         if self.on_progress:
             self.on_progress(0, "BROWSER_STARTED")
+
+    async def change_window_size(self, width: int, height: int):
+        if not self.page:
+            return
+
+        await self.page.set_viewport_size({
+            "width": width,
+            "height": height
+        })
+
+
 
     async def _prepare_page(self):
         pages = self.context.pages
@@ -101,7 +115,7 @@ class BrowserController:
                 raise ValueError(f"Unknown mode: {mode}")
 
             scenario = scenario_cls(self)
-            await scenario.run()
+            return await scenario.run()
 
     async def humanize(self, min_ms=300, max_ms=600):
         await self.page.wait_for_timeout(random.randint(min_ms, max_ms))

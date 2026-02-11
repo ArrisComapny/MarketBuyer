@@ -1,6 +1,7 @@
 from enum import Enum
 
 class ScenarioMode(str, Enum):
-    ACTIVATE = "activate"
-    LOGOUT_LOGIN = "logout-login"
-    START_PROCESS = "scenario_start_process"
+    ACTIVATE = "activate_account"
+    LOGIN = "login_account"
+    START = "start_account"
+    QRCODE = "qrcode_account"

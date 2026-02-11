@@ -123,8 +123,8 @@ class MainWindow(QMainWindow):
         """Возвращает текст кнопки для состояния загрузки в зависимости от режима запуска сценария."""
         return {
             ScenarioMode.ACTIVATE: "Активируется…",
-            ScenarioMode.START_PROCESS: "Запускается…",
-            ScenarioMode.LOGOUT_LOGIN: "Входит…",
+            ScenarioMode.START: "Запускается…",
+            ScenarioMode.LOGIN: "Входит…",
         }.get(mode, "Запускается…")
 
     @staticmethod
@@ -132,8 +132,8 @@ class MainWindow(QMainWindow):
         """Преобразует статус аккаунта из таблицы в режим запуска сценария."""
         return {
             "disable": ScenarioMode.ACTIVATE,
-            "login": ScenarioMode.START_PROCESS,
-            "logout": ScenarioMode.LOGOUT_LOGIN,
+            "login": ScenarioMode.START,
+            "logout": ScenarioMode.LOGIN,
         }.get(status)
 
     @staticmethod
@@ -367,8 +367,12 @@ class MainWindow(QMainWindow):
             CustomMessageBox.information(self, "QR", "Не выбрано ни одного аккаунта.")
             return
 
-        counts = self._selected_status_counts()  # у тебя уже есть, раз AllActivation работает
-        dlg = OpenQrDialog(parent=self, counts=counts)
+        counts = self._selected_status_counts()
+        dlg = OpenQrDialog(
+            parent=self,
+            counts=counts,
+            run_one_for_queue=self._run_one_account_for_queue,
+        )
         dlg.set_selected_accounts(rows)
         dlg.open()
 
@@ -435,7 +439,7 @@ class MainWindow(QMainWindow):
             async def _flow():
                 await self.delete_account_cache_async(phone10)
                 self._set_row_loading(phone10, True, "Входит…")
-                await self.run_account_with_proxy(phone10, mode=ScenarioMode.LOGOUT_LOGIN)
+                await self.run_account_with_proxy(phone10, mode=ScenarioMode.LOGIN)
 
             asyncio.create_task(_flow())
 
@@ -716,8 +720,8 @@ class MainWindow(QMainWindow):
             controller.account = account
             self._browser_controllers[phone10] = controller
 
-            await controller.run(mode=mode)
-            return {"ok": True}
+            data = await controller.run(mode=mode)
+            return {"ok": True, "data": data}
 
         except Exception as e:
             err = str(e)

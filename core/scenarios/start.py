@@ -4,7 +4,7 @@ from .modes import ScenarioMode
 
 
 class StartProcessScenario(BaseScenario):
-    mode = ScenarioMode.START_PROCESS
+    mode = ScenarioMode.START
 
     async def run(self) -> None:
         c = self.c
