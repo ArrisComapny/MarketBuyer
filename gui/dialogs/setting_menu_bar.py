@@ -1,21 +1,21 @@
 import re
 import asyncio
 
+import core.app as app_core
+
 from PySide6.QtCore import QSize
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QFormLayout
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QPushButton, QWidget, QHeaderView
 from PySide6.QtWidgets import QAbstractItemView, QLineEdit, QComboBox, QMessageBox, QSizePolicy
 
-import core.app as app_core
-
-from database.models import Proxy
 from gui.style import AppStyle
+from database.models import Proxy
 from utils.proxy import proxy_title
 from database.repositories import ProxyRepo
 
 
 class ProxyEditDialog(QDialog):
-    def __init__(self, proxy: Proxy | None = None, parent=None) -> None:
+    def __init__(self, parent=None, proxy: Proxy | None = None) -> None:
         """Диалог добавления или редактирования прокси."""
         super().__init__(parent)
 
@@ -219,7 +219,7 @@ class ProxyManagerDialog(QDialog):
             self.table.setDisabled(False)
             return
 
-        dlg = ProxyEditDialog(proxy, self)
+        dlg = ProxyEditDialog(self, proxy)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             self.table.setDisabled(False)
             return
@@ -275,7 +275,7 @@ class ProxyManagerDialog(QDialog):
 
     def on_add_proxy(self) -> None:
         """Открывает диалог добавления нового прокси."""
-        dlg = ProxyEditDialog(None, self)
+        dlg = ProxyEditDialog(self, None)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             asyncio.create_task(self._add_proxy_async(dlg))
 

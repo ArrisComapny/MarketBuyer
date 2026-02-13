@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from core.scenarios.modes import ScenarioMode
+from domain.enums import ScenarioMode
 
 
 class BaseScenario(ABC):

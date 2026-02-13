@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Signal, QSize, Qt
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QProgressBar, QLabel
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton
 
 from gui.style import AppStyle
 
 
 class AccountRowActions(QWidget):
     """Виджет действий строки (колонка "Действие")."""
-
     runClicked = Signal(str)
     cancelClicked = Signal(str)
     settingsClicked = Signal(str)
@@ -61,30 +60,28 @@ class AccountRowActions(QWidget):
         self.btn_more.clicked.connect(self._emit_more)
 
     def set_run_loading(self, loading: bool, text: str, qss: str) -> None:
+        """Переключает кнопку Run в режим загрузки или обычный режим."""
         self._loading = bool(loading)
 
-        # СЦЕНАРИЙ ЗАКОНЧИЛСЯ → сбрасываем флаг отмены
         if not loading:
             self._can_cancel = False
 
         if text:
             self._loading_text = text
 
-        # Браузер реально запущен → разрешаем отмену (и больше НЕ запрещаем)
         if text == "Запущено":
             self._can_cancel = True
 
-        # Кнопка запуска
         self.btn_run.setDisabled(loading)
         self.btn_run.setText(self._loading_text if loading else text)
         self.btn_run.setStyleSheet(qss)
 
-        # Блокируем остальные кнопки строки
         self.btn_settings.setDisabled(loading)
         self.btn_delete.setDisabled(loading)
         self.btn_more.setDisabled(loading)
 
     def _emit_run(self) -> None:
+        """Обрабатывает нажатие Run: запуск или отмена сценария."""
         if self._loading and not self._can_cancel:
             return
 
@@ -95,34 +92,35 @@ class AccountRowActions(QWidget):
         self.runClicked.emit(self.phone10)
 
     def _emit_settings(self) -> None:
-        """Обработчик нажатия кнопки Settings."""
+        """Отправляет сигнал открытия настроек аккаунта."""
         self.settingsClicked.emit(self.phone10)
 
     def _emit_delete(self) -> None:
-        """Обработчик нажатия кнопки Delete."""
+        """Отправляет сигнал удаления аккаунта."""
         self.deleteClicked.emit(self.phone10)
 
     def _emit_more(self) -> None:
-        """Обработчик нажатия кнопки More."""
+        """Отправляет сигнал открытия дополнительного меню."""
         self.moreClicked.emit(self.phone10)
 
     def enterEvent(self, event) -> None:
-        # Если сценарий запущен (кнопка disabled) — при наведении показываем "Отмена"
+        """При наведении мыши показывает кнопку 'Отмена' во время выполнения."""
         if self._loading and self._can_cancel:
             self._show_cancel()
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:
-        # Уходим мышью — возвращаем текст прогресса/загрузки
+        """При уходе курсора восстанавливает текст загрузки."""
         if self._loading:
             self._restore_loading_text()
         super().leaveEvent(event)
 
     def _show_cancel(self) -> None:
-        self.btn_run.setEnabled(True)  # временно даём нажать
+        """Активирует кнопку и показывает текст 'Отмена'."""
+        self.btn_run.setEnabled(True)
         self.btn_run.setText("Отмена")
 
     def _restore_loading_text(self) -> None:
+        """Возвращает кнопку в состояние загрузки."""
         self.btn_run.setEnabled(False)
         self.btn_run.setText(self._loading_text)
-

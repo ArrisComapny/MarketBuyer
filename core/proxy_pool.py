@@ -1,7 +1,8 @@
+import time
+import random
 import asyncio
 import aiohttp
-import random
-import time
+
 from sqlalchemy import select
 
 from database.db import Database
@@ -51,26 +52,13 @@ class ProxyPool:
             rotate_interval_sec: int = 20,  # интервал повторов смены IP
             rotate_wait_after_ok_sec: int = 5,  # пауза после успешной смены IP
             require_rotate: bool = True,
-
             wait_free_total_sec: int = 120,  # ✅ ждать свободный прокси до N секунд
             wait_free_interval_sec: int = 20,  # ✅ проверка каждые N секунд
     ) -> tuple[Proxy | None, str]:
-        """
-        Выдача прокси ТОЛЬКО для массовой очереди.
-
-        Отличие от текущей версии:
-        - если все прокси заняты, НЕ возвращаем сразу "Все прокси заняты",
-          а ждём освобождения до wait_free_total_sec.
-
-        Затем:
-        - резервируем свободный прокси
-        - если require_rotate=True, пытаемся сменить IP на этом прокси
-          каждые rotate_interval_sec секунд в течение rotate_total_wait_sec
-        """
+        """Выдача прокси только для массовой очереди."""
 
         last_err = "Неизвестная ошибка"
 
-        # 0) ждём пока появится хотя бы один свободный прокси
         deadline_free = time.monotonic() + max(0, int(wait_free_total_sec))
 
         free: list[Proxy] = []
@@ -88,20 +76,16 @@ class ProxyPool:
 
             await asyncio.sleep(max(0.2, float(wait_free_interval_sec)))
 
-        # 1) пробуем выдать один из свободных
         for proxy in free:
-            # 1.1) резервируем прокси
             async with self._lock:
                 if proxy.id in self._busy:
                     continue
                 self._busy.add(proxy.id)
 
             try:
-                # 1.2) если ротация не нужна — сразу отдаём
                 if not require_rotate:
                     return proxy, f"Proxy {proxy.id} выдан"
 
-                # 1.3) пытаемся сменить IP на этом прокси в пределах rotate_total_wait_sec
                 deadline_rotate = time.monotonic() + max(0, int(rotate_total_wait_sec))
 
                 while True:
@@ -116,14 +100,11 @@ class ProxyPool:
 
                     now = time.monotonic()
                     if now >= deadline_rotate:
-                        # не смогли сменить IP за отведённое время — освобождаем и пробуем другой прокси
                         await self.release(proxy.id)
                         break
 
                     await asyncio.sleep(min(float(rotate_interval_sec), deadline_rotate - now))
-
             except asyncio.CancelledError:
-                # если массовая очередь отменяется — освобождаем прокси и пробрасываем отмену дальше
                 try:
                     await self.release(proxy.id)
                 except Exception:
@@ -142,10 +123,7 @@ class ProxyPool:
         rotate_wait_sec: int = 5,
         rotate_retries: int = 3,
     ) -> tuple[Proxy | None, str]:
-        """
-        Возвращает свободный прокси.
-        IP не проверяется вообще.
-        """
+        """Возвращает свободный прокси."""
 
         proxies = await self._load_proxies()
         last_err = "Неизвестная ошибка"
@@ -176,7 +154,6 @@ class ProxyPool:
                         await self.release(proxy.id)
                         continue
 
-                # УСПЕХ — отдаём прокси
                 return proxy, f"Proxy {proxy.id} выдан"
 
             except Exception as e:
@@ -187,10 +164,7 @@ class ProxyPool:
         return None, f"Не удалось выдать прокси. Последняя ошибка: {last_err}"
 
     async def capacity(self) -> int:
-        """
-        Сколько всего прокси доступно (по базе).
-        Кэшируем, чтобы не дёргать БД постоянно.
-        """
+        """Сколько всего прокси доступно."""
         if self._capacity_cache is None:
             proxies = await self._load_proxies()
             self._capacity_cache = len(proxies)

@@ -1,20 +1,22 @@
 import asyncio
 
+import core.app as app_core
+
 from PySide6.QtCore import Signal, Qt
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QPushButton
 from PySide6.QtWidgets import QLineEdit, QComboBox, QSizePolicy, QFormLayout
 
-import core.app as app_core
-
-from sqlalchemy.ext.asyncio import AsyncSession
-from utils.phone import phone_to_10_digits
 from database.repositories import AccountRepo
+
+from utils.phone import phone_to_10_digits
 from utils.messagebox import CustomMessageBox
 from utils.random_tools import pick_name_gender, pick_user_agent
 
 
 class AddAccountDialog(QDialog):
+    """Диалоговое окно добавления и редактирования аккаунта WB."""
     account_saved = Signal()
 
     def __init__(self, parent=None, account: dict | None = None) -> None:
@@ -35,19 +37,16 @@ class AddAccountDialog(QDialog):
         form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
 
-        # --- Телефон ---
         self.phone_edit = QLineEdit()
         self.phone_edit.setPlaceholderText("Например: +7 900 111-22-33 или 89001112233")
         self.phone_edit.setMinimumHeight(30)
         form.addRow("Телефон", self.phone_edit)
 
-        # --- Имя ---
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("Если пусто — выберется автоматически из списка")
         self.name_edit.setMinimumHeight(30)
         form.addRow("Имя", self.name_edit)
 
-        # --- Пол ---
         self.gender_combo = QComboBox()
         self.gender_combo.addItem("Сгенерировать автоматически", None)
         self.gender_combo.addItem("Мужской", "Male")
@@ -56,7 +55,6 @@ class AddAccountDialog(QDialog):
         self.gender_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         form.addRow("Пол", self.gender_combo)
 
-        # --- User-Agent ---
         self.ua_edit = QLineEdit()
         self.ua_edit.setPlaceholderText("Если пусто — выберется автоматически из списка")
         self.ua_edit.setMinimumHeight(30)

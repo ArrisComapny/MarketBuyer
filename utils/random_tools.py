@@ -16,7 +16,6 @@ def load_names() -> list[tuple[str, str]]:
     Returns:
         Список кортежей (name, gender). Если файла нет — пустой список.
     """
-
     path_file_name = NAMES_FILE_PATH
     if not path_file_name.exists():
         return []
@@ -52,7 +51,6 @@ def load_user_agents() -> list[str]:
     Returns:
         Список user-agent строк. Если файла нет — пустой список.
     """
-
     path_ua_file = UA_FILE_PATH
     if not path_ua_file.exists():
         return []
@@ -75,7 +73,6 @@ def load_user_agents() -> list[str]:
 
 async def pick_user_agent(session: AsyncSession) -> str:
     """Возвращает user-agent для нового аккаунта."""
-
     agents = load_user_agents()
     if not agents:
         raise ValueError("Список user-agent пуст или файл не найден")
@@ -89,7 +86,6 @@ async def pick_user_agent(session: AsyncSession) -> str:
 
 async def pick_name_gender(session: AsyncSession, selected_gender: str | None = None) -> tuple[str, str]:
     """Возвращает пару (имя, пол) для нового аккаунта."""
-
     pool = load_names()
     if not pool:
         raise ValueError("Список имён пуст или файл не найден")

@@ -1,12 +1,13 @@
 from __future__ import annotations
 from .base import BaseScenario
-from .modes import ScenarioMode
+from domain.enums import ScenarioMode
 
 
 class StartProcessScenario(BaseScenario):
+    """Сценарий запуска браузера"""
     mode = ScenarioMode.START
 
     async def run(self) -> None:
+        """Запуск сценария."""
         c = self.c
-        print("[SCENARIO] start_process — браузер открыт")
         await c.context.wait_for_event("close", timeout=0)

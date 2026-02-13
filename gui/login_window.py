@@ -1,13 +1,13 @@
 import base64
 import binascii
 
+import core.app as app_core
+
 from qasync import asyncSlot
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton, QHBoxLayout, QCheckBox, QApplication
 
-import core.app as app_core
-
-from database.repositories import UserRepo
 from gui.style import AppStyle
+from database.repositories import UserRepo
 from utils.messagebox import CustomMessageBox
 from core.settings import save_settings, load_settings
 
@@ -26,7 +26,6 @@ class LoginWindow(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 10, 15, 10)
 
-        # --- Логин ---
         login_row = QHBoxLayout()
         login_label = QLabel("Логин")
         login_label.setFixedWidth(50)
@@ -38,7 +37,6 @@ class LoginWindow(QWidget):
         login_row.addWidget(login_label)
         login_row.addWidget(self.login)
 
-        # --- Пароль ---
         password_row = QHBoxLayout()
         password_label = QLabel("Пароль")
         password_label.setFixedWidth(50)
@@ -51,11 +49,9 @@ class LoginWindow(QWidget):
         password_row.addWidget(password_label)
         password_row.addWidget(self.password)
 
-        # --- Запомнить ---
         self.remember_cb = QCheckBox("Запомнить")
         self.remember_cb.setStyleSheet(AppStyle.qss_checkbox_spacing())
 
-        # --- Кнопка ---
         self.btn = QPushButton("Войти")
         self.btn.clicked.connect(self.try_login)
         self.btn.setStyleSheet(AppStyle.qss_btn_disabled_dark())

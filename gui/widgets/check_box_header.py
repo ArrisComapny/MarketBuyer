@@ -31,10 +31,7 @@ class CheckBoxHeader(QHeaderView):
         self.style().drawControl(QStyle.ControlElement.CE_CheckBox, option, painter)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        """
-        Если клик попал в checkbox — переключает состояние и emit сигнал.
-        В противном случае — стандартное поведение заголовка.
-        """
+        """Клик по checkbox заголовка переключает состояние и emit сигнал."""
         if self._checkbox_rect.contains(event.pos()):
             self._toggle_state()
             self.clicked.emit(self._state)
@@ -43,10 +40,7 @@ class CheckBoxHeader(QHeaderView):
         super().mousePressEvent(event)
 
     def setState(self, state: Qt.CheckState) -> None:
-        """
-        Принудительно устанавливает состояние checkbox в заголовке.
-        Используется для Unchecked / PartiallyChecked / Checked.
-        """
+        """Принудительно устанавливает состояние checkbox в заголовке."""
         if self._state == state:
             return
 
@@ -60,7 +54,7 @@ class CheckBoxHeader(QHeaderView):
             if self._state == Qt.CheckState.Checked
             else Qt.CheckState.Checked
         )
-        self.viewport().update()  # <- добавить
+        self.viewport().update()
 
     def _create_checkbox_option(self, section_rect: QRect) -> QStyleOptionButton:
         """Создаёт и настраивает QStyleOptionButton для чекбокса."""

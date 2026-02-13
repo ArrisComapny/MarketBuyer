@@ -3,7 +3,7 @@ from __future__ import annotations
 import core.app as app_core
 
 from .base import BaseScenario
-from .modes import ScenarioMode
+from domain.enums import ScenarioMode
 from database.repositories import AccountRepo, UsersAccountsRepo
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 

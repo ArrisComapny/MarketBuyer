@@ -1,20 +1,17 @@
-from dataclasses import dataclass
-from pathlib import Path
 import sys
+
+from pathlib import Path
+from dataclasses import dataclass
+
 from PySide6.QtGui import QIcon
 
 
 def resource_path(rel_path: str) -> Path:
-    """
-    Универсальный путь к ресурсам:
-    - DEV: путь от main.py
-    - PyInstaller onedir / onefile: путь от _MEIPASS
-    """
+    """Универсальный путь к ресурсам."""
     # PyInstaller
     if hasattr(sys, "_MEIPASS"):
         return Path(sys._MEIPASS) / rel_path
 
-    # Обычный запуск (python main.py)
     base = Path(sys.argv[0]).resolve().parent
     return base / rel_path
 
@@ -22,7 +19,6 @@ def resource_path(rel_path: str) -> Path:
 @dataclass(frozen=True)
 class AppStyle:
     """Централизованные стили (QSS) и иконки проекта."""
-
     # --- Карта иконок (ключ -> файл) ---
     ICONS = {
         "filter": "filter.ico",
@@ -38,10 +34,7 @@ class AppStyle:
 
     @classmethod
     def icon_path(cls, key: str) -> str:
-        """
-        Возвращает абсолютный путь к иконке.
-        Работает и в dev, и в PyInstaller.
-        """
+        """Возвращает абсолютный путь к иконке."""
         filename = cls.ICONS.get(key)
         if not filename:
             raise KeyError(f"Unknown icon key: {key!r}")
@@ -110,4 +103,13 @@ class AppStyle:
             background-color: #2d2d2d;
             color: #888888;
         }
+        """
+
+    @staticmethod
+    def qss_label_stats() -> str:
+        return """
+            QLabel {
+                font-size: 13px;
+                padding: 12px 18px;
+            }
         """

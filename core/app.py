@@ -6,6 +6,7 @@ class DBConnectionError(Exception):
     pass
 
 async def init_application():
+    """Инициализация подключения к базе данных."""
     global db
     db = Database(echo=False)
 

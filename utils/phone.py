@@ -3,7 +3,6 @@ import re
 
 def phone_to_10_digits(text: str) -> str | None:
     """Нормализует номер телефона РФ к формату из 10 цифр."""
-
     #  Удаляем ВСЁ, кроме цифр
     digits = re.sub(r"\D", "", text)
 
@@ -23,7 +22,6 @@ def format_phone_ru(phone10: str) -> str:
     Форматирует номер телефона из 10 цифр в вид: +7 XXX-XXX-XX-XX.
     Если после очистки цифр не 10 — возвращает исходную строку.
     """
-
     digits = re.sub(r"\D", "", phone10)
 
     if len(digits) != 10:

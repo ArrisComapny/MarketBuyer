@@ -1,5 +1,6 @@
 import random
 import asyncio
+
 import core.app as app_core
 
 from typing import Callable, Optional
@@ -9,7 +10,8 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from config import PROFILE_DIR
 
-from core.scenarios.modes import ScenarioMode
+from domain.enums import ScenarioMode
+
 from core.scenarios.activate import ActivateScenario
 from core.scenarios.login import LoginScenario
 from core.scenarios.start import StartProcessScenario
@@ -90,12 +92,7 @@ class BrowserController:
         if not self.page:
             return
 
-        await self.page.set_viewport_size({
-            "width": width,
-            "height": height
-        })
-
-
+        await self.page.set_viewport_size({"width": width, "height": height})
 
     async def _prepare_page(self):
         pages = self.context.pages
@@ -107,8 +104,6 @@ class BrowserController:
             headless = HEADLESS.get(mode, False)
             await self._launch_context(p, headless)
             await self._prepare_page()
-
-            print(mode)
 
             scenario_cls = SCENARIOS.get(mode)
             if not scenario_cls:
@@ -158,69 +153,34 @@ class BrowserController:
 
     async def close_modal(self):
         try:
-            btn = await self.page.wait_for_selector(
-                "button.close",
-                timeout=5000,
-                state="visible"
-            )
+            btn = await self.page.wait_for_selector("button.close", timeout=5000, state="visible")
             await self.human_wait()
             await self.human_click(btn)
         except PlaywrightTimeoutError:
-            print(f"реклама закрыта")
             pass
 
     async def accept_cookie(self):
         try:
-            cookie_btn = await self.page.wait_for_selector(
-                "button.cookies__btn",
-                timeout=5000,
-                state="visible"
-            )
+            cookie_btn = await self.page.wait_for_selector( "button.cookies__btn", timeout=5000, state="visible")
             await self.human_wait()
             await self.human_click(cookie_btn)
         except PlaywrightTimeoutError:
-            print("cookie уже были приняты или кнопка не появилась")
             pass
 
     async def click_login_btn(self):
         phone = self.account.get("phone10")
-        # 1) клик "Войти"
-        login_btn = None
-        last_error = None
 
-        selectors = [
-            '[data-testid="login"]',
-            '[data-wba-header-name="login"]',
-            'a.navbar-pc__link:has(.navbar-pc__icon--profile)',
-            '.navbar-pc__icon--profile']
-
-        for selector in selectors:
-            try:
-                login_btn = await self.page.wait_for_selector(
-                    selector,
-                    timeout=3000,
-                    state="visible"
-                )
-                print(f"Найден элемент по селектору: {selector}")
-                break
-            except PlaywrightTimeoutError as e:
-                last_error = e
-
-        if not login_btn:
-            print("Кнопка логина / профиля не найдена ни по одному селектору")
-            raise Exception("Кнопка логина / профиля не найдена") from last_error
+        try:
+            login_btn = await self.page.wait_for_selector('[data-testid="login"]', timeout=3000, state="visible")
+        except PlaywrightTimeoutError as e:
+            raise Exception("Кнопка логина / профиля не найдена")
 
         await self.human_wait()
         await self.human_click(login_btn)
         await self.humanize()
 
-        # 2) ввод телефона
         try:
-            phone_inp = await self.page.wait_for_selector(
-                "[data-testid='phoneInput']",
-                timeout=10000,
-                state="visible"
-            )
+            phone_inp = await self.page.wait_for_selector( "[data-testid='phoneInput']", timeout=10000, state="visible")
         except PlaywrightTimeoutError:
             raise Exception("Окно 'Ввод' не найдено")
 
@@ -229,25 +189,22 @@ class BrowserController:
         await self.human_type(phone_inp, phone)
         await self.humanize()
 
-        # 3) Нажимаем на кнопку получить код
         try:
             request_code_btn = await self.page.wait_for_selector(
-                "button[data-testid='requestCodeBtn']",
-                timeout=5000,
-                state="visible"
+                "button[data-testid='requestCodeBtn']", timeout=5000, state="visible"
             )
         except PlaywrightTimeoutError:
             raise Exception("Кнопка 'получить код' не найдена")
+
         await self.human_wait()
         await self.human_click(request_code_btn)
         await self.humanize()
-        # после клика "Получить код"
+
         await self.page.wait_for_timeout(300)
 
         error_text = None
 
-        # ждём до 15 секунд, проверяя каждые 300мс
-        for _ in range(15):  # 20 * 300ms = 4.5 сек
+        for _ in range(15):
             loc = self.page.locator("span#phoneInputErrorMessage.error--MakvU")
 
             if await loc.count() > 0:
@@ -259,16 +216,13 @@ class BrowserController:
             await self.page.wait_for_timeout(300)
 
         if error_text:
-            print(f"[{phone}] Ошибка запроса кода: {error_text}")
             raise Exception(f"[{phone}] Ошибка запроса кода: {error_text}")
 
         async with app_core.db.get_session() as session:
             code = await PhoneCodeRepo.wait_latest_code(session, phone)
 
         await self.page.wait_for_selector(
-            "input[autocomplete='one-time-code']",
-            timeout=15000,
-            state="visible"
+            "input[autocomplete='one-time-code']", timeout=15000, state="visible"
         )
         inputs = self.page.locator("input[autocomplete='one-time-code']")
 
@@ -277,21 +231,11 @@ class BrowserController:
             await self.human_click(el)
             await el.fill(ch)
 
-
-        profile_selectors = [
-            'a[data-testid="profile"]',
-            'a[data-wba-header-name="LK"]',
-            'a:has-text("Профиль")'
-        ]
-        for sel in profile_selectors:
-            try:
-                await self.page.wait_for_selector(sel, state="visible", timeout=10000)
-                print(f"Профиль найден по селектору: {sel}")
-                return True
-            except PlaywrightTimeoutError:
-                continue
-
-        raise Exception("Кнопка 'Профиль' не найдена ни по одному селектору")
+        try:
+            await self.page.wait_for_selector('a[data-testid="profile"]', state="visible", timeout=10000)
+            return True
+        except PlaywrightTimeoutError:
+            raise Exception("Кнопка 'Профиль' не найдена ни по одному селектору")
 
     async def close(self):
         if getattr(self, "context", None):

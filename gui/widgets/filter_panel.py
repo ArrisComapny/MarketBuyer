@@ -5,6 +5,7 @@ from PySide6.QtCore import Signal, QSize, QPropertyAnimation, QEasingCurve
 from PySide6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QLineEdit, QToolButton
 
 from gui.style import AppStyle
+from domain.enums import AccountStatus
 
 
 class FilterPanel(QWidget):
@@ -19,7 +20,6 @@ class FilterPanel(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
 
-        # ================== Верхняя строка: кнопка фильтра + поиск ==================
         top_row = QHBoxLayout()
         top_row.setContentsMargins(0, 0, 0, 0)
         top_row.setSpacing(10)
@@ -46,7 +46,6 @@ class FilterPanel(QWidget):
 
         root.addLayout(top_row)
 
-        # ================== Панель фильтра (скрывается/показывается анимацией) ==================
         self.panel = QFrame(self)
         self.panel.setFrameShape(QFrame.Shape.StyledPanel)
         self.panel.setVisible(False)
@@ -81,12 +80,10 @@ class FilterPanel(QWidget):
         panel_layout.addWidget(row)
         root.addWidget(self.panel)
 
-        # Анимация
         self.anim = QPropertyAnimation(self.panel, b"maximumHeight", self)
         self.anim.setDuration(180)
         self.anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
-        # Сигналы
         self.btn_filter.toggled.connect(self._toggle_panel)
         self.search_input.textChanged.connect(lambda _: self.changed.emit())
 
@@ -100,11 +97,11 @@ class FilterPanel(QWidget):
         """Возвращает выбранные статусы (пустой set означает «показывать всё»)."""
         allowed: set[str] = set()
         if self.cb_disable.isChecked():
-            allowed.add("disable")
+            allowed.add(AccountStatus.DISABLE)
         if self.cb_login.isChecked():
-            allowed.add("login")
+            allowed.add(AccountStatus.LOGIN)
         if self.cb_logout.isChecked():
-            allowed.add("logout")
+            allowed.add(AccountStatus.LOGOUT)
         return allowed
 
     def search_text(self) -> str:
@@ -157,5 +154,4 @@ class FilterPanel(QWidget):
             self.anim.finished.connect(_hide)
             self.anim.start()
 
-        # любое раскрытие/сворачивание тоже влияет на UX — можно считать "changed"
         self.changed.emit()

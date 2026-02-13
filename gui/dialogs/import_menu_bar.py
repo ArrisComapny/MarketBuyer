@@ -2,30 +2,22 @@ from __future__ import annotations
 
 import asyncio
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QFileDialog,
-    QTableWidget, QTableWidgetItem, QHeaderView
-)
+import core.app as app_core
 
+from PySide6.QtCore import Qt
 from openpyxl import load_workbook
 from sqlalchemy.exc import IntegrityError
+from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout
+from PySide6.QtWidgets import QPushButton, QLabel, QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView
 
-import core.app as app_core
 from database.repositories import AccountRepo
+
 from utils.phone import phone_to_10_digits
 from utils.random_tools import pick_name_gender, pick_user_agent
 
 
 class ImportMenuBarDialog(QDialog):
-    """
-    Окно импорта Excel:
-    - Выбор файла
-    - Превью: phone10 / статус
-    - Импорт: на каждый номер вызываем pick_name_gender + pick_user_agent
-    - В конце: commit + обновление таблицы в MainWindow
-    """
+    """Окно импорта Excel."""
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Импорт из Excel")
@@ -38,7 +30,6 @@ class ImportMenuBarDialog(QDialog):
         root.setContentsMargins(14, 14, 14, 14)
         root.setSpacing(10)
 
-        # Верхняя панель: путь к файлу + кнопка "Выбрать"
         top = QHBoxLayout()
         self.lbl_file = QLabel("Файл: не выбран")
         self.btn_pick = QPushButton("Выбрать Excel…")
@@ -48,7 +39,6 @@ class ImportMenuBarDialog(QDialog):
         top.addWidget(self.btn_pick, 0)
         root.addLayout(top)
 
-        # Таблица превью (ТОЛЬКО 2 колонки)
         self.table = QTableWidget(self)
         self.table.setColumnCount(2)
         self.table.setHorizontalHeaderLabels(["Телефон", "Статус"])
@@ -65,7 +55,6 @@ class ImportMenuBarDialog(QDialog):
 
         root.addWidget(self.table, 1)
 
-        # Нижняя панель: инфо + кнопки
         bottom = QHBoxLayout()
         self.lbl_info = QLabel("0 строк")
 
@@ -83,15 +72,8 @@ class ImportMenuBarDialog(QDialog):
         bottom.addWidget(self.btn_close, 0)
         root.addLayout(bottom)
 
-    # ---------------- UI: choose file & preview ----------------
-
     def pick_file(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Выберите Excel файл",
-            "",
-            "Excel (*.xlsx)"
-        )
+        path, _ = QFileDialog.getOpenFileName(self, "Выберите Excel файл", "", "Excel (*.xlsx)")
         if not path:
             return
 
@@ -141,11 +123,8 @@ class ImportMenuBarDialog(QDialog):
         self.lbl_info.setText(f"Загружено строк: {added}")
         self.btn_import.setEnabled(added > 0)
 
-    def load_first_column(self, path: str) -> list[str]:
-        """
-        Берём значения только из колонки A (A1..A*) на первом листе.
-        Пустые строки пропускаем.
-        """
+    @staticmethod
+    def load_first_column(path: str) -> list[str]:
         wb = load_workbook(path, read_only=True, data_only=True)
         ws = wb.active
 
@@ -159,8 +138,6 @@ class ImportMenuBarDialog(QDialog):
 
         wb.close()
         return out
-
-    # ---------------- IMPORT LOGIC ----------------
 
     def on_import_clicked(self) -> None:
         if not self._file_path:
@@ -194,7 +171,6 @@ class ImportMenuBarDialog(QDialog):
                         continue
 
                     try:
-                        # ✅ SAVEPOINT — ошибка одной строки не откатывает всё
                         async with session.begin_nested():
                             name, gender = await pick_name_gender(session)
                             ua = await pick_user_agent(session)
@@ -214,7 +190,6 @@ class ImportMenuBarDialog(QDialog):
                         added_ok += 1
 
                     except IntegrityError:
-                        # nested откатится сам
                         if st_item:
                             st_item.setText("exists")
                         skipped_exists += 1
@@ -224,16 +199,11 @@ class ImportMenuBarDialog(QDialog):
                             st_item.setText(f"error: {e}")
                         failed_other += 1
 
-                # ✅ сохраняем всё что импортировалось успешно
                 await session.commit()
 
-            # ✅ ОБНОВЛЕНИЕ ТАБЛИЦЫ В MAIN (load_accounts у тебя asyncSlot -> просто вызвать)
             parent = self.parent()
             if parent and hasattr(parent, "load_accounts"):
                 parent.load_accounts()
-
-            # Если хочешь автозакрытие окна после импорта — раскомментируй:
-            # self.accept()
 
         finally:
             self.btn_pick.setEnabled(True)
@@ -247,6 +217,3 @@ class ImportMenuBarDialog(QDialog):
                 f"ошибок: {failed_other}\n"
                 f"Импорт завершён"
             )
-
-
-
