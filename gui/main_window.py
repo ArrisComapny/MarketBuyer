@@ -390,9 +390,10 @@ class MainWindow(QMainWindow):
         finally:
             self.table.setDisabled(False)
 
+
     def open_settings(self) -> None:
         """Открывает окно управления прокси."""
-        dlg = ProxyManagerDialog(self)
+        dlg = ProxyManagerDialog(self, proxy_pool=self.proxy_pool)
         dlg.exec()
 
     async def delete_account_async(self, phone10: str) -> None:

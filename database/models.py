@@ -65,4 +65,5 @@ class Proxy(Base):
     password: Mapped[str] = mapped_column(String(20), nullable=False)
     proxy_scheme: Mapped[str] = mapped_column(String(20), nullable=False)
     change_ip_url: Mapped[str] = mapped_column(String(255), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean(), default=True, nullable=False)
 
