@@ -1,8 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import Integer, String, ForeignKey, DateTime, Boolean, UniqueConstraint
-
+from sqlalchemy import Integer, String, ForeignKey, DateTime, Boolean, UniqueConstraint, Text
 from database.db import Base
 
 
@@ -13,6 +12,8 @@ class User(Base):
     password: Mapped[str] = mapped_column(String(20), nullable=False)
     name: Mapped[str] = mapped_column(String(50), nullable=False)
     status: Mapped[bool] = mapped_column(Boolean(), default=True, nullable=False)
+    role = mapped_column(String(20), default="manager", nullable=False)
+    permissions = mapped_column(Text(), default="[]", nullable=False)
 
     accounts_link: Mapped[list["UsersAccounts"]] = relationship(back_populates="user_ref", cascade="all, delete-orphan")
 

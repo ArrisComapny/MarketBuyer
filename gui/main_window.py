@@ -37,6 +37,8 @@ from utils.messagebox import CustomMessageBox
 
 from database.repositories import AccountRepo, UsersAccountsRepo
 
+from core.permissions import Perm, calc_user_permissions
+
 
 class MainWindow(QMainWindow):
     def __init__(self, user) -> None:
@@ -44,6 +46,12 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowIcon(AppStyle.icon("app"))
         self.user = user
+
+        # ✅ Права пользователя (deny-list в JSONB)
+        self.perms = calc_user_permissions(
+            self.user.role,
+            self.user.permissions
+        )
 
         self.setWindowTitle(f"MarketBuyer – {user.login}")
         self.resize(1300, 700)
@@ -81,19 +89,26 @@ class MainWindow(QMainWindow):
         self.filter.changed.connect(self.apply_filters)
 
         self.btn_add = QPushButton("Добавить ЛК")
-        self.btn_activate = QPushButton("Активировать")
-        self.btn_qr = QPushButton("Забрать QR")
+        self.btn_activate = QPushButton("Массовая активация")
+        self.btn_qr = QPushButton("Получить QR")
         self.btn_delete_selected = QPushButton("Удалить выбранные")
+
         self.btn_delete_selected.setMinimumHeight(35)
         self.btn_qr.setMinimumHeight(35)
+
         self.btn_add.clicked.connect(self.add_personal_account)
         self.btn_activate.clicked.connect(self.open_all_activation)
         self.btn_qr.clicked.connect(self.open_qr_dialog)
         self.btn_delete_selected.clicked.connect(self.delete_selected_accounts)
 
-
         for b in (self.btn_add, self.btn_activate):
             b.setMinimumHeight(35)
+
+        # ✅ Запрет "Удалить выбранные" (скрываем кнопку)
+        # if Perm.DELETE_SELECTED not in self.perms:
+        #     self.btn_delete_selected.hide()
+
+
 
         top_row.addWidget(self.filter)
         top_row.addStretch()
@@ -286,6 +301,8 @@ class MainWindow(QMainWindow):
         asyncio.create_task(self._open_account_editor(phone10))
 
     def on_delete_clicked_phone(self, phone10: str) -> None:
+        if Perm.DELETE_ACCOUNT not in self.perms:
+            return self._deny()
         """Запрашивает подтверждение и удаляет аккаунт из БД."""
         reply = CustomMessageBox.question(
             self,
@@ -321,7 +338,12 @@ class MainWindow(QMainWindow):
         dlg.set_selected_accounts(rows)
         dlg.open()
 
+    def _deny(self) -> None:
+        CustomMessageBox.warning(self, "Доступ запрещён", "Недостаточно прав.")
+
     def delete_selected_accounts(self) -> None:
+        if Perm.DELETE_SELECTED not in self.perms:
+            return self._deny()
         rows = self.table.selected_accounts_rows()
         if not rows:
             CustomMessageBox.information(self, "Удаление", "Не выбрано ни одного аккаунта.")
@@ -714,3 +736,6 @@ class MainWindow(QMainWindow):
             self.running_ui.pop(phone10, None)
 
             QTimer.singleShot(0, lambda: self._set_row_loading(phone10, False))
+
+
+

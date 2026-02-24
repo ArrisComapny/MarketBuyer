@@ -12,7 +12,7 @@ from gui.style import AppStyle
 from database.models import Proxy
 from utils.proxy import proxy_title
 from database.repositories import ProxyRepo
-from typing import Callable
+from core.permissions import Perm
 
 
 class ProxyEditDialog(QDialog):
@@ -79,16 +79,26 @@ class ProxyEditDialog(QDialog):
             return
 
         # 🔹 ПРОВЕРКА IP ПО REGEX (IPv4)
+        # 🔹 IPv4
         ip_regex = (
             r"^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
             r"(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$"
         )
 
-        if not re.fullmatch(ip_regex, host):
+        # 🔹 Домен (proxy.goodmanproxy.com)
+        domain_regex = (
+            r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)"
+            r"(\.[A-Za-z]{2,})+$"
+        )
+
+        if not (re.fullmatch(ip_regex, host) or re.fullmatch(domain_regex, host)):
             QMessageBox.warning(
                 self,
                 "Ошибка",
-                "Host должен быть корректным IPv4-адресом (например 192.168.1.1)."
+                "Host должен быть корректным IPv4-адресом или доменным именем\n"
+                "Примеры:\n"
+                "192.168.1.1\n"
+                "proxy.goodmanproxy.com"
             )
             self.host_edit.setFocus()
             return
@@ -135,6 +145,7 @@ class ProxyManagerDialog(QDialog):
     def __init__(self, parent=None, proxy_pool=None) -> None:
         """Окно управления списком прокси."""
         super().__init__(parent)
+        self.perms = getattr(parent, "perms", set())
 
         # ✅ ИЗМЕНЕНО: сохранили proxy_pool (может быть None)
         self.proxy_pool = proxy_pool
@@ -200,6 +211,8 @@ class ProxyManagerDialog(QDialog):
             btn_delete.setFixedSize(35, 25)
             btn_delete.setStyleSheet(AppStyle.qss_icon_btn())
 
+
+
             btn_edit.clicked.connect(lambda _, pid=proxy.id: self.open_edit_dialog(pid))
             btn_delete.clicked.connect(lambda _, pid=proxy.id: self.ask_delete(pid))
 
@@ -237,6 +250,14 @@ class ProxyManagerDialog(QDialog):
 
     def open_edit_dialog(self, proxy_id: int) -> None:
         """Открывает диалог редактирования прокси по его ID."""
+        if Perm.EDIT_PROXY not in self.perms:
+            QMessageBox.warning(
+                self,
+                "Доступ запрещён",
+                "У вас недостаточно прав."
+            )
+            return
+
         self.table.setDisabled(True)
         asyncio.create_task(self.open_edit_async(proxy_id))
 
@@ -292,6 +313,13 @@ class ProxyManagerDialog(QDialog):
 
     def ask_delete(self, proxy_id: int) -> None:
         """Запрашивает подтверждение удаления прокси у пользователя."""
+        if Perm.DELETE_PROXY not in self.perms:
+            QMessageBox.warning(
+                self,
+                "Доступ запрещён",
+                "У вас недостаточно прав."
+            )
+            return
         btn = QMessageBox.question(
             self,
             "Удалить прокси?",
@@ -324,6 +352,13 @@ class ProxyManagerDialog(QDialog):
 
     def on_add_proxy(self) -> None:
         """Открывает диалог добавления нового прокси."""
+        if Perm.OPEN_PROXY not in self.perms:
+            QMessageBox.warning(
+                self,
+                "Доступ запрещён",
+                "У вас недостаточно прав."
+            )
+            return
         dlg = ProxyEditDialog(self, None)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             asyncio.create_task(self._add_proxy_async(dlg))
@@ -359,3 +394,8 @@ class ProxyManagerDialog(QDialog):
             QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить прокси:\n{e}")
         finally:
             await self.load_proxies()
+
+    def _has_perm(self, perm: str) -> bool:
+        mw = self.window()
+        perms = getattr(mw, "perms", None)
+        return bool(perms and perm in perms)

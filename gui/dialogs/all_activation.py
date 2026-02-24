@@ -3,13 +3,18 @@ from __future__ import annotations
 import asyncio
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView, QWidget
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QPushButton
+from PySide6.QtWidgets import (
+    QTableWidget, QTableWidgetItem, QHeaderView, QWidget,
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QPushButton
+)
 
 from gui.style import AppStyle
-
 from domain.dtos import SelectedCounts, RowItems
 from domain.enums import ScenarioMode, AccountStatus
+
+from utils.logger import AppLogger
+
+log = AppLogger.get(__name__)
 
 
 class AllActivationDialog(QDialog):
@@ -100,11 +105,15 @@ class AllActivationDialog(QDialog):
         bottom.addStretch()
         root.addLayout(bottom)
 
+        log.info("[MASS] AllActivationDialog opened")
+
     def set_selected_accounts(self, rows: list[RowItems]) -> None:
         """Заполняет таблицу выбранными аккаунтами для массового запуска."""
         self._rows = rows[:]
         self._row_by_phone.clear()
         self.table.setRowCount(len(rows))
+
+        log.info(f"[MASS] set_selected_accounts rows={len(rows)}")
 
         for r, data in enumerate(rows):
             phone = data.phone10
@@ -149,21 +158,27 @@ class AllActivationDialog(QDialog):
 
     def on_start_clicked(self) -> None:
         """Обрабатывает нажатие кнопки 'Запустить/Отмена/Готово'."""
+        log.info(f"[MASS] click start: running={self._running} completed={self._completed}")
+
         if self._completed:
+            log.info("[MASS] dialog close (completed)")
             self.accept()
             return
 
         if not self._running:
             self._running = True
             self.btn_start.setText("Отмена")
+            log.info(f"[MASS] start (rows={len(self._rows)}) relogin_login={self.cb_login.isChecked()}")
             self._start_mass()
         else:
             self._running = False
             self.btn_start.setText("Запустить")
+            log.info("[MASS] cancel requested")
             self._cancel_mass()
 
     def _on_mass_finished(self) -> None:
         """Вызывается после завершения массового запуска."""
+        log.info("[MASS] finished")
         self._running = False
         self._completed = True
         self.btn_start.setText("Готово")
@@ -171,33 +186,42 @@ class AllActivationDialog(QDialog):
     def _start_mass(self) -> None:
         """Запускает асинхронную очередь массовой обработки аккаунтов."""
         if self._mass_task and not self._mass_task.done():
+            log.info("[MASS] start ignored: already running")
             return
         self._mass_cancel = False
+        log.info("[MASS] task created")
         self._mass_task = asyncio.create_task(self.run_selected_accounts_queue(self._rows))
 
     def _cancel_mass(self) -> None:
         """Останавливает массовый запуск и отменяет активные задачи."""
         self._mass_cancel = True
+        log.info("[MASS] cancel flag set")
         if self._mass_task and not self._mass_task.done():
             self._mass_task.cancel()
+            log.info("[MASS] mass_task cancelled")
         asyncio.create_task(self._stop_all_mass_running())
 
     async def run_selected_accounts_queue(self, rows: list[RowItems]) -> None:
         """Формирует очередь аккаунтов и запускает их выполнение с учетом параллельности и доступных прокси."""
         if not rows:
+            log.info("[MASS] no rows -> exit")
             return
 
         relogin_login = bool(self.cb_login.isChecked())
         q: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
 
+        log.info(f"[MASS] build queue: rows={len(rows)} relogin_login={relogin_login}")
+
         for item in rows:
             if self.mw.closing:
+                log.info("[MASS] mainwindow closing -> break building queue")
                 break
 
             phone10 = item.phone10
             status = item.status
 
             if status == AccountStatus.LOGIN and not relogin_login:
+                log.info(f"[MASS][{phone10}] skip LOGIN (checkbox off)")
                 QTimer.singleShot(0, lambda p=phone10: self.set_row_exec(p, "skip"))
                 QTimer.singleShot(0, lambda p=phone10: self.set_row_progress(
                     p, 0, f"Пропуск: {AccountStatus.LOGIN} (галочка выкл.)"
@@ -205,10 +229,12 @@ class AllActivationDialog(QDialog):
                 continue
 
             if status == AccountStatus.LOGIN and relogin_login:
+                log.info(f"[MASS][{phone10}] relogin requested -> delete cache")
                 QTimer.singleShot(0, lambda p=phone10: self.set_row_progress(p, 0, "Удаляем кэш…"))
                 try:
                     await self.mw.delete_account_cache_async(phone10)
                 except Exception as e:
+                    log.warning(f"[MASS][{phone10}] cache delete error: {e}")
                     QTimer.singleShot(0, lambda p=phone10: self.set_row_exec(p, "error"))
                     QTimer.singleShot(0, lambda p=phone10, ee=str(e): self.set_row_progress(
                         p, 0, f"Ошибка удаления кэша: {ee}"
@@ -222,6 +248,7 @@ class AllActivationDialog(QDialog):
 
             mode = self.mw.status_to_mode(status)
             if not mode:
+                log.info(f"[MASS][{phone10}] skip unknown status={status}")
                 QTimer.singleShot(0, lambda p=phone10: self.set_row_exec(p, "unknown"))
                 QTimer.singleShot(0, lambda p=phone10: self.set_row_progress(
                     p, 0, "Пропуск: неизвестный статус"
@@ -231,33 +258,42 @@ class AllActivationDialog(QDialog):
             QTimer.singleShot(0, lambda p=phone10: self.set_row_exec(p, "В очереди"))
             await q.put((phone10, mode))
 
+        log.info(f"[MASS] queue ready: size={q.qsize()}")
+
         if q.empty():
+            log.info("[MASS] queue empty -> exit")
             return
 
         max_parallel = 10
         capacity = await self.mw.proxy_pool.capacity()
         workers_n = min(max_parallel, capacity)
+        log.info(f"[MASS] capacity={capacity} -> workers_n={workers_n}")
 
         if workers_n <= 0:
+            log.warning("[MASS] no available proxies (workers_n<=0)")
             QTimer.singleShot(0, lambda: self.setWindowTitle("Нет доступных прокси"))
             self._running = False
             self.btn_start.setText("Запустить")
             return
 
         workers = [asyncio.create_task(self._mass_worker(q)) for _ in range(workers_n)]
+        log.info(f"[MASS] workers started: {workers_n}")
 
         try:
             try:
                 await q.join()
             except asyncio.CancelledError:
+                log.info("[MASS] queue join cancelled")
                 pass
         finally:
+            log.info("[MASS] queue done, stopping workers")
             for w in workers:
                 w.cancel()
             await asyncio.gather(*workers, return_exceptions=True)
 
             if not self.mw.closing:
                 await self.mw.load_accounts()
+                log.info("[MASS] accounts reloaded")
 
             QTimer.singleShot(0, self._on_mass_finished)
 
@@ -268,8 +304,11 @@ class AllActivationDialog(QDialog):
         while True:
             phone10, mode = await q.get()
             QTimer.singleShot(0, lambda p=phone10: self.set_row_exec(p, "Выполняется"))
+            log.info(f"[MASS][{phone10}] start mode={mode}")
+
             try:
                 if self.mw.closing or self._mass_cancel:
+                    log.info(f"[MASS][{phone10}] cancelled (closing={self.mw.closing} cancel={self._mass_cancel})")
                     QTimer.singleShot(0, lambda p=phone10: self.set_row_progress(p, 0, "Отменено"))
                     QTimer.singleShot(0, lambda p=phone10: self.set_row_exec(p, "Отмена"))
                     continue
@@ -279,11 +318,12 @@ class AllActivationDialog(QDialog):
                 requeue = bool(result.get("requeue"))
                 msg = (result.get("msg") or "").strip()
 
+                log.info(f"[MASS][{phone10}] result ok={ok} requeue={requeue} msg={msg}")
+
                 if ok:
                     QTimer.singleShot(0, lambda p=phone10: self.set_row_exec(p, "Готово"))
-                    QTimer.singleShot(0, lambda p=phone10: self.set_row_progress(
-                        p, 100, "Сценарий выполнен"
-                    ))
+                    QTimer.singleShot(0, lambda p=phone10: self.set_row_progress(p, 100, "Сценарий выполнен"))
+                    log.info(f"[MASS][{phone10}] done")
                     continue
 
                 if requeue:
@@ -293,34 +333,36 @@ class AllActivationDialog(QDialog):
 
                     if tries >= 3:
                         QTimer.singleShot(0, lambda p=phone10: self.set_row_exec(p, "Ошибка"))
-                        QTimer.singleShot(0, lambda p=phone10, m=(
-                                msg or "Не удалось сменить IP (лимит попыток)"
-                        ): self.set_row_progress( p, 0, f"Ошибка: {m}"))
+                        QTimer.singleShot(0, lambda p=phone10, m=(msg or "Не удалось сменить IP (лимит попыток)")
+                                          : self.set_row_progress(p, 0, f"Ошибка: {m}"))
+                        log.error(f"[MASS][{phone10}] requeue limit reached (3). msg={msg}")
                         continue
 
                     QTimer.singleShot(0, lambda p=phone10: self.set_row_exec(p, "В очереди"))
                     QTimer.singleShot(0, lambda p=phone10, t=tries, m=msg: self.set_row_progress(
                         p, 0, f"IP не сменился → в конец очереди (попытка {t}/3). {m}"
                     ))
+                    log.warning(f"[MASS][{phone10}] requeue try={tries}/3 msg={msg}")
                     await q.put((phone10, mode))
                     continue
 
                 QTimer.singleShot(0, lambda p=phone10: self.set_row_exec(p, "Ошибка"))
                 if msg:
-                    QTimer.singleShot(0, lambda p=phone10, m=msg: self.set_row_progress(
-                        p, 0, f"Ошибка: {m}"
-                    ))
+                    QTimer.singleShot(0, lambda p=phone10, m=msg: self.set_row_progress(p, 0, f"Ошибка: {m}"))
+                log.error(f"[MASS][{phone10}] error: {msg}")
 
             except Exception as e:
-                QTimer.singleShot(0, lambda p=phone10, ee=str(e): self.set_row_progress(
-                    p, 0, f"Worker error: {ee}"
-                ))
+                log.exception(f"[MASS][{phone10}] worker exception: {e}")
+                QTimer.singleShot(0, lambda p=phone10, ee=str(e): self.set_row_progress(p, 0, f"Worker error: {ee}"))
                 QTimer.singleShot(0, lambda p=phone10: self.set_row_exec(p, "Ошибка"))
+
             finally:
                 q.task_done()
 
     async def _stop_all_mass_running(self) -> None:
         """Принудительно останавливает все запущенные браузеры, отменяет задачи и освобождает прокси."""
+        log.info("[MASS] stop_all_mass_running begin")
+
         for phone10, controller in list(self.mw.browser_controllers.items()):
             try:
                 await controller.close()
@@ -328,6 +370,7 @@ class AllActivationDialog(QDialog):
                 pass
             QTimer.singleShot(0, lambda p=phone10: self.set_row_progress(p, 0, "Отменено"))
             QTimer.singleShot(0, lambda p=phone10: self.set_row_exec(p, "cancel"))
+            log.info(f"[MASS][{phone10}] controller closed")
 
         for phone10, task in list(self.mw.browser_tasks.items()):
             try:
@@ -341,8 +384,11 @@ class AllActivationDialog(QDialog):
                 await self.mw.proxy_pool.release(proxy_id)
             except Exception:
                 pass
+            log.info(f"[MASS][{phone10}] proxy released")
 
         self.mw.browser_tasks.clear()
         self.mw.browser_controllers.clear()
         self.mw.account_proxy.clear()
         self.mw.running_ui.clear()
+
+        log.info("[MASS] stop_all_mass_running done")
