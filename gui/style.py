@@ -106,6 +106,22 @@ class AppStyle:
         """
 
     @staticmethod
+    def qss_toggle(active: bool) -> str:
+        return f"""
+                QPushButton {{
+                    border: 1px solid rgba(0,0,0,0.15);
+                    border-radius: 6px;
+                    padding: 2px 10px;
+                    font-weight: 600;
+                    color: white;
+                    background: {'#2ecc71' if active else '#e74c3c'};
+                }}
+                QPushButton:hover {{
+                    background: {'#29b765' if active else '#d64535'};
+                }}
+            """
+
+    @staticmethod
     def qss_label_stats() -> str:
         return """
             QLabel {

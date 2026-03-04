@@ -1,5 +1,6 @@
 import base64
 import zipfile
+import shutil
 from datetime import datetime
 
 from pathlib import Path
@@ -84,14 +85,22 @@ def save_mass_results_to_excel(xlsx_path: str, all_results: list[QrResult]) -> s
         save_found_data_to_excel(xlsx_path, r)
     return str(Path(xlsx_path).resolve())
 
-def make_zip(export_dir: Path) -> str:
-    """Создаёт архив из содержимого export_dir."""
+def make_zip(temp_dir: Path, export_root: Path) -> str:
+    """
+    Создаёт архив из содержимого temp_dir,
+    сохраняет архив в export_root,
+    после чего удаляет temp_dir.
+    """
+
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    zip_path = export_dir / f"qr_export_{timestamp}.zip"
+    zip_path = export_root / f"qr_export_{timestamp}.zip"
+
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for f in export_dir.rglob("*"):
+        for f in temp_dir.rglob("*"):
             if f.is_file():
-                if f.resolve() == zip_path.resolve():
-                    continue
-                zf.write(f, f.relative_to(export_dir))
+                zf.write(f, f.relative_to(temp_dir))
+
+    # удаляем временную папку полностью
+    shutil.rmtree(temp_dir, ignore_errors=True)
+
     return str(zip_path)

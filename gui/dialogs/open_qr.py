@@ -1,22 +1,21 @@
 from __future__ import annotations
 
 import asyncio
-
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QTableWidgetItem, QHeaderView, QWidget, QFileDialog
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,  QTableWidget
+from PySide6.QtWidgets import (QTableWidgetItem,QHeaderView,QWidget,QFileDialog,QDialog,
+QVBoxLayout,QHBoxLayout,QLabel,QPushButton,QTableWidget,)
 
 from gui.style import AppStyle
-
 from domain.dtos import RowItems, SelectedCounts, QrResult
 from domain.enums import ScenarioMode, AccountStatus
 from utils.save_qr_info import save_mass_results_to_excel, make_zip
 
 
 class OpenQrDialog(QDialog):
-    """Диалоговое окно сбора информации о заказах"""
+    """Диалоговое окно сбора QR по выбранным аккаунтам."""
+
     def __init__(self, parent: "MainWindow", counts: SelectedCounts):
         super().__init__(parent)
 
@@ -25,7 +24,7 @@ class OpenQrDialog(QDialog):
         self._rows: list[RowItems] = []
         self._row_by_phone: dict[str, int] = {}
 
-        self.setWindowTitle("Забрать QR")
+        self.setWindowTitle("Получить QR")
         self.resize(980, 620)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
 
@@ -47,7 +46,6 @@ class OpenQrDialog(QDialog):
             f"{AccountStatus.LOGOUT}: {counts.logout}\n"
             f"{AccountStatus.LOGIN}: {counts.login}\n"
         )
-
         stats.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         stats.setStyleSheet(AppStyle.qss_label_stats())
         left.addWidget(stats)
@@ -85,7 +83,7 @@ class OpenQrDialog(QDialog):
         bottom = QHBoxLayout()
         bottom.addStretch()
 
-        self.btn_start = QPushButton("Забрать QR")
+        self.btn_start = QPushButton("Запустить")
         self.btn_start.setMinimumSize(260, 44)
         self.btn_start.clicked.connect(self.on_start_clicked)
 
@@ -96,6 +94,15 @@ class OpenQrDialog(QDialog):
         self._export_dir: str | None = None
         self._all_results: list[QrResult] = []
 
+        # ===== STATE =====
+        self._running: bool = False
+        self._completed: bool = False
+
+        self._qr_task: asyncio.Task | None = None
+        self._workers: list[asyncio.Task] = []
+        self._cancel_requested: bool = False
+
+    # ---------- UI helpers ----------
     def set_selected_accounts(self, rows: list[RowItems]) -> None:
         """Заполняет таблицу выбранными аккаунтами, для которых будем забирать QR."""
         self._rows = rows[:]
@@ -143,8 +150,28 @@ class OpenQrDialog(QDialog):
             return
         self.table.item(r, 3).setText(text)
 
+    # ---------- Start / Cancel / Done ----------
     def on_start_clicked(self) -> None:
-        """Запрашивает папку экспорта и запускает асинхронный сбор QR для выбранных аккаунтов."""
+        """
+        Кнопка работает как:
+        - "Получить QR" -> старт
+        - "Отмена" -> отменить все сценарии
+        - "Готово" -> закрыть окно
+        """
+        # 1) если уже завершили — закрываем
+        if self._completed:
+            self.accept()
+            return
+
+        # 2) если идёт выполнение — это "Отмена"
+        if self._running:
+            self._cancel_requested = True
+            self.btn_start.setEnabled(False)
+            self.btn_start.setText("Отмена…")
+            asyncio.create_task(self._cancel_all())
+            return
+
+        # 3) старт
         export_dir = self._ask_export_directory()
         if not export_dir:
             return
@@ -152,55 +179,231 @@ class OpenQrDialog(QDialog):
         self._export_dir = export_dir
         self._all_results = []
 
-        asyncio.create_task(self._run_qr_for_selected())
+        self._running = True
+        self._completed = False
+        self._cancel_requested = False
 
+        self.btn_start.setEnabled(True)
+        self.btn_start.setText("Отмена")
+
+        self._qr_task = asyncio.create_task(self._run_qr_for_selected())
+
+    async def _cancel_all(self) -> None:
+        """Отменяет воркеры/таски и принудительно закрывает браузеры + освобождает прокси."""
+        # 1) отменяем основную задачу
+        if self._qr_task and not self._qr_task.done():
+            self._qr_task.cancel()
+
+        # 2) отменяем воркеров
+        for t in list(self._workers):
+            if t and not t.done():
+                t.cancel()
+        if self._workers:
+            await asyncio.gather(*self._workers, return_exceptions=True)
+
+        # 3) зачистка: браузеры + прокси (как в mass)
+        await self._stop_all_running()
+
+        # 4) вернуть UI в "не запущено"
+        self._running = False
+        self._completed = False
+        self.btn_start.setEnabled(True)
+        self.btn_start.setText("Запустить")
+
+    async def _stop_all_running(self) -> None:
+        """Закрывает все контроллеры браузеров и освобождает прокси, которые могли остаться заняты."""
+        # Эти поля предполагаются такими же, как в mass/all_activation.
+        browser_map = getattr(self.mw, "browser_controllers", None)
+        proxy_map = getattr(self.mw, "account_proxy", None)
+        running_ui = getattr(self.mw, "running_ui", None)
+
+        if isinstance(browser_map, dict):
+            for phone10, controller in list(browser_map.items()):
+                try:
+                    await controller.close()
+                except Exception:
+                    pass
+                self.set_row_result(phone10, "Отменено")
+                self.set_row_progress(phone10, 0, "Отменено")
+            browser_map.clear()
+
+        if isinstance(proxy_map, dict):
+            for phone10, proxy_id in list(proxy_map.items()):
+                try:
+                    await self.mw.proxy_pool.release(proxy_id)
+                except Exception:
+                    pass
+            proxy_map.clear()
+
+        if isinstance(running_ui, dict):
+            running_ui.clear()
+
+    # ---------- Main worker runner ----------
     async def _run_qr_for_selected(self) -> None:
-        """
-        Последовательно запускает сценарий получения QR для каждого аккаунта,
-        собирает результаты и сохраняет их в Excel + ZIP в выбранную папку.
-        """
+        def reset_btn() -> None:
+            self._running = False
+            self._completed = False
+            self.btn_start.setEnabled(True)
+            self.btn_start.setText("Запустить")
+
+        def finish_ok() -> None:
+            self._running = False
+            self._completed = True
+            self.btn_start.setEnabled(True)
+            self.btn_start.setText("Готово")
+
         if not self._export_dir:
+            reset_btn()
             return
 
+        self._workers = []
+        self._cancel_requested = False
+        self._all_results = []
+
+        q: asyncio.Queue[str] = asyncio.Queue()
         for item in self._rows:
-            phone10 = item.phone10
+            phone10 = getattr(item, "phone10", None)
             if not phone10:
                 continue
+            await q.put(phone10)
+            self.set_row_result(phone10, "В очереди")
+            self.set_row_progress(phone10, 0, "")
 
-            self.set_row_result(phone10, "Запуск…")
+        if q.empty():
+            reset_btn()
+            return
 
-            result = await self.mw.run_one_account_for_queue(phone10, ScenarioMode.QRCODE, self)
+        max_parallel = 10
+        try:
+            capacity = await self.mw.proxy_pool.capacity()
+            workers_n = max(1, min(max_parallel, int(capacity)))
+        except Exception:
+            workers_n = 3
 
-            if result.get("ok"):
-                payload = result.get("data")
-                if payload:
-                    self._all_results.append(payload)
+        results_lock = asyncio.Lock()
+        retries: dict[str, int] = {}
+        max_retries = 3
 
-                self.set_row_result(phone10, "QR получен")
-                self.set_row_progress(phone10, 100, "Готово")
-            else:
-                msg = result.get("msg", "Ошибка")
-                self.set_row_result(phone10, "Ошибка")
-                self.set_row_progress(phone10, 0, msg)
+        async def worker(_: int) -> None:
+            while True:
+                phone10 = await q.get()
+                try:
+                    if self._cancel_requested:
+                        self.set_row_result(phone10, "Отменено")
+                        self.set_row_progress(phone10, 0, "Отменено")
+                        continue
 
-        export_dir = Path(self._export_dir)
-        export_dir.mkdir(parents=True, exist_ok=True)
+                    self.set_row_result(phone10, "Запуск…")
+                    self.set_row_progress(phone10, 0, "Старт")
 
-        xlsx_path = export_dir / "qr_export.xlsx"
+                    result = await self.mw.run_one_account_for_queue(phone10, ScenarioMode.QRCODE, self)
 
-        save_mass_results_to_excel(str(xlsx_path), self._all_results)
+                    if self._cancel_requested:
+                        self.set_row_result(phone10, "Отменено")
+                        self.set_row_progress(phone10, 0, "Отменено")
+                        continue
+
+                    ok = (result.get("ok") is True)
+                    requeue = (result.get("requeue") is True)
+                    msg = (result.get("msg") or "Ошибка").strip()
+
+                    if ok:
+                        payload = result.get("data")
+
+                        # ✅ если сценарий вернул данные, но товаров нет
+                        if payload and not payload.pvz_list:
+                            self.set_row_result(phone10, "Внимание")
+                            self.set_row_progress(phone10, 100, "Товаров нет")
+                            continue
+
+                        # ✅ обычный успех: есть товары → сохраняем
+                        if payload:
+                            async with results_lock:
+                                self._all_results.append(payload)
+
+                        self.set_row_result(phone10, "QR получен")
+                        self.set_row_progress(phone10, 100, "Готово")
+                        continue
+
+                    if requeue:
+                        tries = retries.get(phone10, 0) + 1
+                        retries[phone10] = tries
+
+                        if tries >= max_retries:
+                            self.set_row_result(phone10, "Ошибка")
+                            self.set_row_progress(phone10, 0, f"IP не сменился (лимит {max_retries}). {msg}")
+                            continue
+
+                        self.set_row_result(phone10, "В очереди")
+                        self.set_row_progress(phone10, 0, f"IP не сменился → повтор {tries}/{max_retries}. {msg}")
+                        await q.put(phone10)
+                        continue
+
+                    self.set_row_result(phone10, "Ошибка")
+                    self.set_row_progress(phone10, 0, msg)
+
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    self.set_row_result(phone10, "Ошибка")
+                    self.set_row_progress(phone10, 0, f"{type(e).__name__}: {e}")
+                finally:
+                    q.task_done()
+
+        self._workers = [asyncio.create_task(worker(i)) for i in range(workers_n)]
+        try:
+            await q.join()
+        finally:
+            for w in self._workers:
+                w.cancel()
+            await asyncio.gather(*self._workers, return_exceptions=True)
+
+        if self._cancel_requested:
+            reset_btn()
+            return
 
         try:
-            make_zip(export_dir)
-        except Exception as e:
-            raise  Exception("ОШИБКА ZIP:", repr(e))
+            export_dir = Path(self._export_dir)
+            export_dir.mkdir(parents=True, exist_ok=True)
 
+            temp_dir = export_dir / f"qr_temp_{asyncio.get_running_loop().time():.0f}"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+
+            xlsx_path = temp_dir / "qr_export.xlsx"
+            save_mass_results_to_excel(str(xlsx_path), self._all_results)
+
+            make_zip(temp_dir, export_dir)
+
+        except Exception as e:
+            if self._rows:
+                phone10 = getattr(self._rows[0], "phone10", "") or ""
+                self.set_row_progress(phone10, 0, f"ZIP: {type(e).__name__}: {e}")
+            reset_btn()
+            return
+
+        finish_ok()
+
+    # ---------- Close blocking while running ----------
+    def closeEvent(self, event) -> None:
+        # нельзя закрыть крестиком пока идёт выполнение
+        if self._running:
+            event.ignore()
+            return
+        super().closeEvent(event)
+
+    def reject(self) -> None:
+        # нельзя закрыть Esc / reject пока идёт выполнение
+        if self._running:
+            return
+        super().reject()
+
+    # ---------- Directory picker ----------
     def _ask_export_directory(self) -> str | None:
         """Открывает диалог выбора папки и возвращает путь."""
         dir_path = QFileDialog.getExistingDirectory(
             self,
             "Выберите папку для сохранения QR",
             "",
-            QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks
+            QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks,
         )
         return dir_path or None

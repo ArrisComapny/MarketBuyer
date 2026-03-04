@@ -1,8 +1,6 @@
-import time
-import random
 import asyncio
 import aiohttp
-
+import random
 from sqlalchemy import select
 
 from database.db import Database
@@ -13,15 +11,40 @@ class ProxyPool:
     def __init__(self):
         self._lock = asyncio.Lock()
         self._busy: set[int] = set()
-        self._capacity_cache: int | None = None
 
-    @staticmethod
-    async def _load_proxies() -> list[Proxy]:
+        # ✅ Кэш активных прокси
+        self._proxies_cache: list[Proxy] | None = None
+
+    # =========================
+    # КЭШ
+    # =========================
+
+    def invalidate_cache(self) -> None:
+        """Сбросить кэш активных прокси (вызывать после изменений в БД)."""
+        self._proxies_cache = None
+
+    async def _load_proxies(self) -> list[Proxy]:
+        """
+        Загружает ТОЛЬКО активные прокси.
+        Использует кэш, чтобы не дёргать БД постоянно.
+        """
+        if self._proxies_cache is not None:
+            return self._proxies_cache
+
         async with Database().get_session() as session:
             res = await session.execute(
-                select(Proxy).order_by(Proxy.id.asc())
+                select(Proxy)
+                .where(Proxy.active.is_(True))
+                .order_by(Proxy.id.asc())
             )
-            return res.scalars().all()
+            proxies = res.scalars().all()
+
+        self._proxies_cache = proxies
+        return proxies
+
+    # =========================
+    # IP ROTATION
+    # =========================
 
     @staticmethod
     async def _change_ip(proxy: Proxy) -> tuple[bool, str]:
@@ -42,26 +65,33 @@ class ProxyPool:
         except Exception as e:
             return False, f"Смена IP ошибка: {e}"
 
+    # =========================
+    # ОСВОБОЖДЕНИЕ
+    # =========================
+
     async def release(self, proxy_id: int) -> None:
         async with self._lock:
             self._busy.discard(proxy_id)
 
+    # =========================
+    # MASS ACQUIRE
+    # =========================
+
     async def acquire_mass(
-            self,
-            rotate_total_wait_sec: int = 120,  # общее ожидание смены IP (на один прокси)
-            rotate_interval_sec: int = 20,  # интервал повторов смены IP
-            rotate_wait_after_ok_sec: int = 5,  # пауза после успешной смены IP
-            require_rotate: bool = True,
-            wait_free_total_sec: int = 120,  # ✅ ждать свободный прокси до N секунд
-            wait_free_interval_sec: int = 20,  # ✅ проверка каждые N секунд
+        self,
+        rotate_total_wait_sec: int = 120,
+        rotate_interval_sec: int = 20,
+        rotate_wait_after_ok_sec: int = 5,
+        require_rotate: bool = True,
+        wait_free_total_sec: int = 120,
+        wait_free_interval_sec: int = 20,
     ) -> tuple[Proxy | None, str]:
-        """Выдача прокси только для массовой очереди."""
 
         last_err = "Неизвестная ошибка"
 
-        deadline_free = time.monotonic() + max(0, int(wait_free_total_sec))
+        # Ждём свободный прокси
+        deadline_free = asyncio.get_event_loop().time() + wait_free_total_sec
 
-        free: list[Proxy] = []
         while True:
             proxies = await self._load_proxies()
 
@@ -71,11 +101,12 @@ class ProxyPool:
                     random.shuffle(free)
                     break
 
-            if time.monotonic() >= deadline_free:
+            if asyncio.get_event_loop().time() >= deadline_free:
                 return None, "Все прокси заняты (таймаут ожидания)"
 
-            await asyncio.sleep(max(0.2, float(wait_free_interval_sec)))
+            await asyncio.sleep(wait_free_interval_sec)
 
+        # Пытаемся выдать один
         for proxy in free:
             async with self._lock:
                 if proxy.id in self._busy:
@@ -86,7 +117,7 @@ class ProxyPool:
                 if not require_rotate:
                     return proxy, f"Proxy {proxy.id} выдан"
 
-                deadline_rotate = time.monotonic() + max(0, int(rotate_total_wait_sec))
+                deadline_rotate = asyncio.get_event_loop().time() + rotate_total_wait_sec
 
                 while True:
                     ok, msg = await self._change_ip(proxy)
@@ -98,17 +129,14 @@ class ProxyPool:
 
                     last_err = msg
 
-                    now = time.monotonic()
-                    if now >= deadline_rotate:
+                    if asyncio.get_event_loop().time() >= deadline_rotate:
                         await self.release(proxy.id)
                         break
 
-                    await asyncio.sleep(min(float(rotate_interval_sec), deadline_rotate - now))
+                    await asyncio.sleep(rotate_interval_sec)
+
             except asyncio.CancelledError:
-                try:
-                    await self.release(proxy.id)
-                except Exception:
-                    pass
+                await self.release(proxy.id)
                 raise
 
             except Exception as e:
@@ -117,13 +145,16 @@ class ProxyPool:
 
         return None, f"Не удалось выдать прокси. Последняя ошибка: {last_err}"
 
+    # =========================
+    # SINGLE ACQUIRE
+    # =========================
+
     async def acquire(
         self,
         require_rotate: bool = True,
         rotate_wait_sec: int = 5,
         rotate_retries: int = 3,
     ) -> tuple[Proxy | None, str]:
-        """Возвращает свободный прокси."""
 
         proxies = await self._load_proxies()
         last_err = "Неизвестная ошибка"
@@ -159,13 +190,15 @@ class ProxyPool:
             except Exception as e:
                 last_err = str(e)
                 await self.release(proxy.id)
-                continue
 
         return None, f"Не удалось выдать прокси. Последняя ошибка: {last_err}"
 
+    # =========================
+    # CAPACITY
+    # =========================
+
     async def capacity(self) -> int:
-        """Сколько всего прокси доступно."""
-        if self._capacity_cache is None:
-            proxies = await self._load_proxies()
-            self._capacity_cache = len(proxies)
-        return self._capacity_cache
+        """Сколько активных прокси доступно."""
+        proxies = await self._load_proxies()
+        return len(proxies)
+

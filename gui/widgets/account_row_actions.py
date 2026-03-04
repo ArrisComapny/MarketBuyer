@@ -6,6 +6,8 @@ from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton
 from gui.style import AppStyle
 
 
+
+
 class AccountRowActions(QWidget):
     """Виджет действий строки (колонка "Действие")."""
     runClicked = Signal(str)
@@ -58,6 +60,8 @@ class AccountRowActions(QWidget):
         self.btn_settings.clicked.connect(self._emit_settings)
         self.btn_delete.clicked.connect(self._emit_delete)
         self.btn_more.clicked.connect(self._emit_more)
+
+
 
     def set_run_loading(self, loading: bool, text: str, qss: str) -> None:
         """Переключает кнопку Run в режим загрузки или обычный режим."""

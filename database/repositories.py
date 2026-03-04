@@ -27,6 +27,12 @@ class ProxyRepo:
         return res.scalars().all()
 
     @staticmethod
+    async def set_active(session: AsyncSession, proxy_id: int, active: bool) -> None:
+        await session.execute(
+            update(Proxy).where(Proxy.id == proxy_id).values(active=bool(active))
+        )
+
+    @staticmethod
     async def get_proxy_by_id(session: AsyncSession, proxy_id: int) -> Proxy | None:
         return await session.get(Proxy, proxy_id)
 

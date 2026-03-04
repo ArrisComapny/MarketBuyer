@@ -5,9 +5,11 @@ from qasync import QEventLoop
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QPalette, QColor
 
+from utils.logger import AppLogger
 from gui.login_window import LoginWindow
 from utils.messagebox import CustomMessageBox
 from core.app import init_application, DBConnectionError
+
 
 login_window: LoginWindow | None = None
 
@@ -55,6 +57,7 @@ def apply_fixed_theme(application: QApplication) -> None:
     """)
 
 if __name__ == "__main__":
+    AppLogger.setup()
     app = QApplication([])
     apply_fixed_theme(app)
     loop = QEventLoop(app)
