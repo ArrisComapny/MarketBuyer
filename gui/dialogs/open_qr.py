@@ -189,22 +189,34 @@ class OpenQrDialog(QDialog):
         self._qr_task = asyncio.create_task(self._run_qr_for_selected())
 
     async def _cancel_all(self) -> None:
-        """Отменяет воркеры/таски и принудительно закрывает браузеры + освобождает прокси."""
-        # 1) отменяем основную задачу
+        """Отменяет воркеры/таски, закрывает браузеры/прокси и сохраняет то, что уже собрано."""
+        # 1) просим остановиться
+        self._cancel_requested = True
+
+        # 2) отменяем основную задачу
         if self._qr_task and not self._qr_task.done():
             self._qr_task.cancel()
 
-        # 2) отменяем воркеров
+        # 3) отменяем воркеров
         for t in list(self._workers):
             if t and not t.done():
                 t.cancel()
         if self._workers:
             await asyncio.gather(*self._workers, return_exceptions=True)
 
-        # 3) зачистка: браузеры + прокси (как в mass)
+        # 4) зачистка: браузеры + прокси
         await self._stop_all_running()
 
-        # 4) вернуть UI в "не запущено"
+        # 5) ✅ экспорт уже собранного
+        try:
+            await self._export_partial_results(suffix="cancelled")
+        except Exception as e:
+            # можно показать в UI (например, в первой строке)
+            if self._rows:
+                phone10 = getattr(self._rows[0], "phone10", "") or ""
+                self.set_row_progress(phone10, 0, f"Экспорт: {type(e).__name__}: {e}")
+
+        # 6) вернуть UI в "не запущено"
         self._running = False
         self._completed = False
         self.btn_start.setEnabled(True)
@@ -275,7 +287,10 @@ class OpenQrDialog(QDialog):
 
         max_parallel = 10
         try:
-            capacity = await self.mw.proxy_pool.capacity()
+            capacity = await self.mw.proxy_pool.capacity(
+                user_login=self.mw.user.login,
+                is_admin=(self.mw.user.role == "admin"),
+            )
             workers_n = max(1, min(max_parallel, int(capacity)))
         except Exception:
             workers_n = 3
@@ -407,3 +422,22 @@ class OpenQrDialog(QDialog):
             QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks,
         )
         return dir_path or None
+
+    async def _export_partial_results(self, *, suffix: str = "partial") -> None:
+        """Сохраняет XLSX и ZIP из уже собранных результатов (self._all_results)."""
+        if not self._export_dir:
+            return
+        if not self._all_results:
+            return  # нечего сохранять
+
+        export_dir = Path(self._export_dir)
+        export_dir.mkdir(parents=True, exist_ok=True)
+
+        # уникальная папка, чтобы не затирать
+        temp_dir = export_dir / f"qr_{suffix}_{asyncio.get_running_loop().time():.0f}"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
+        xlsx_path = temp_dir / "qr_export.xlsx"
+        save_mass_results_to_excel(str(xlsx_path), self._all_results)
+
+        make_zip(temp_dir, export_dir)

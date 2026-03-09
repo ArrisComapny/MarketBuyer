@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout
 from PySide6.QtWidgets import QPushButton, QLabel, QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView
 
-from database.repositories import AccountRepo
+from database.repositories import AccountRepo, UsersAccountsRepo
 
 from utils.phone import phone_to_10_digits
 from utils.random_tools import pick_name_gender, pick_user_agent
@@ -71,6 +71,8 @@ class ImportMenuBarDialog(QDialog):
         bottom.addWidget(self.btn_import, 0)
         bottom.addWidget(self.btn_close, 0)
         root.addLayout(bottom)
+
+
 
     def pick_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Выберите Excel файл", "", "Excel (*.xlsx)")
@@ -147,6 +149,7 @@ class ImportMenuBarDialog(QDialog):
     async def import_async(self) -> None:
         self.btn_import.setEnabled(False)
         self.btn_pick.setEnabled(False)
+        login = getattr(getattr(self.parent(), "user", None), "login", None)
 
         added_ok = 0
         skipped_bad = 0
@@ -184,6 +187,8 @@ class ImportMenuBarDialog(QDialog):
                                 comment=""
                             )
                             await session.flush()
+                            if login:
+                                await UsersAccountsRepo.set_users_accounts(session, phone10=phone10, login=login)
 
                         if st_item:
                             st_item.setText("imported")

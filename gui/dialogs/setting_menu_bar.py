@@ -145,6 +145,9 @@ class ProxyManagerDialog(QDialog):
     def __init__(self, parent=None, proxy_pool=None) -> None:
         """Окно управления списком прокси."""
         super().__init__(parent)
+        self.user = getattr(parent, "user", None)
+        if self.user is None:
+            raise RuntimeError("ProxyManagerDialog: parent.user не найден")
         self.perms = getattr(parent, "perms", set())
 
         # ✅ ИЗМЕНЕНО: сохранили proxy_pool (может быть None)
@@ -181,7 +184,11 @@ class ProxyManagerDialog(QDialog):
         """Загружает список прокси из базы данных и обновляет таблицу."""
         try:
             async with app_core.db.get_session() as session:
-                proxies = await ProxyRepo.get_proxies(session)
+                proxies = await ProxyRepo.get_proxies(
+                    session,
+                    user_login=self.user.login,
+                    is_admin=(self.user.role == "admin"),
+                )
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить прокси:\n{e}")
             return
@@ -365,6 +372,9 @@ class ProxyManagerDialog(QDialog):
 
     async def _add_proxy_async(self, dlg: ProxyEditDialog) -> None:
         """Асинхронно сохраняет новый прокси в базу данных и обновляет список прокси."""
+
+        owner_login = self.user.login
+
         host = dlg.host_edit.text().strip()
         port = dlg.port_edit.text().strip()
         login = dlg.login_edit.text().strip()
@@ -382,16 +392,17 @@ class ProxyManagerDialog(QDialog):
                     password=password,
                     proxy_scheme=scheme,
                     change_ip_url=change_ip_url,
+                    owner_login=owner_login,
                 )
-                # ✅ ИЗМЕНЕНО: commit обязателен
+
                 await session.commit()
 
-            # ✅ ИЗМЕНЕНО: сброс кэша ProxyPool после добавления
             if self.proxy_pool is not None:
                 self.proxy_pool.invalidate_cache()
 
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить прокси:\n{e}")
+
         finally:
             await self.load_proxies()
 

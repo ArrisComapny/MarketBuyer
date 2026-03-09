@@ -6,7 +6,7 @@ import datetime
 from typing import Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, delete, insert, desc, distinct, Row
+from sqlalchemy import select, update, delete, insert, desc, distinct
 
 from database.models import Account, UsersAccounts, PhoneCode, User, Proxy
 
@@ -21,9 +21,19 @@ class UserRepo:
 
 
 class ProxyRepo:
+
     @staticmethod
-    async def get_proxies(session: AsyncSession) -> Sequence[Proxy]:
-        res = await session.execute(select(Proxy).order_by(Proxy.id.desc()))
+    async def get_proxies(session: AsyncSession, *, user_login: str, is_admin: bool) -> Sequence[Proxy]:
+        stmt = select(Proxy).order_by(Proxy.id.desc())
+
+        if not is_admin:
+            stmt = (
+                select(Proxy)
+                .where(Proxy.owner_login == user_login)
+                .order_by(Proxy.id.desc())
+            )
+
+        res = await session.execute(stmt)
         return res.scalars().all()
 
     @staticmethod
@@ -45,20 +55,24 @@ class ProxyRepo:
         return True
 
     @staticmethod
-    async def add_proxy(session: AsyncSession,
-                        host: str,
-                        port: str,
-                        login: str,
-                        password: str,
-                        proxy_scheme: str,
-                        change_ip_url: str) -> None:
+    async def add_proxy(
+            session: AsyncSession,
+            host: str,
+            port: str,
+            login: str,
+            password: str,
+            proxy_scheme: str,
+            change_ip_url: str,
+            owner_login: str | None = None,  # ✅ добавили
+    ) -> None:
         proxy = Proxy(
             host=host,
             port=port,
             login=login,
             password=password,
             proxy_scheme=proxy_scheme,
-            change_ip_url=change_ip_url
+            change_ip_url=change_ip_url,
+            owner_login=owner_login,  # ✅ записали
         )
         session.add(proxy)
 
@@ -80,10 +94,18 @@ class AccountRepo:
         return list(res.scalars().all())
 
     @staticmethod
-    async def get_list_accounts(session: AsyncSession) -> Sequence[Row[tuple[str, str | None, str | None]]]:
-        res = await session.execute(
-            select(Account.phone, Account.comment, Account.status).order_by(Account.phone.desc())
-        )
+    async def get_list_accounts(session, *, user_login: str, is_admin: bool):
+        stmt = select(Account.phone, Account.comment, Account.status).order_by(Account.phone.desc())
+
+        if not is_admin:
+            stmt = (
+                select(Account.phone, Account.comment, Account.status)
+                .join(UsersAccounts, UsersAccounts.phone == Account.phone)
+                .where(UsersAccounts.user == user_login)
+                .order_by(Account.phone.desc())
+            )
+
+        res = await session.execute(stmt)
         return res.all()
 
     @staticmethod

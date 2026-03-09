@@ -265,7 +265,10 @@ class AllActivationDialog(QDialog):
             return
 
         max_parallel = 10
-        capacity = await self.mw.proxy_pool.capacity()
+        capacity = await self.mw.proxy_pool.capacity(
+            user_login=self.mw.user.login,
+            is_admin=(self.mw.user.role == "admin"),
+        )
         workers_n = min(max_parallel, capacity)
         log.info(f"[MASS] capacity={capacity} -> workers_n={workers_n}")
 

@@ -32,8 +32,8 @@ SCENARIOS = {
 }
 
 HEADLESS = {
-    ActivateScenario.mode: True,
-    LoginScenario.mode: True,
+    ActivateScenario.mode:False ,
+    LoginScenario.mode: False,
     StartProcessScenario.mode: False,
     QRcodeScenario.mode: True,
 }
@@ -51,8 +51,6 @@ class BrowserController:
         self.account = None
         self.user_agent = user_agent
         self.on_progress = on_progress
-
-        phone10 = (self.account or {}).get("phone10", "unknown")
 
     def _build_proxy_cfg(self) -> ProxySettings:
         if not self.proxy:
@@ -194,7 +192,7 @@ class BrowserController:
         try:
             login_btn = await self.page.wait_for_selector(
                 '[data-testid="login"]',
-                timeout=3000,
+                timeout=4000,
                 state="visible"
             )
         except PlaywrightTimeoutError:

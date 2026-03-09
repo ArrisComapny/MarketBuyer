@@ -36,18 +36,20 @@ class ActivateScenario(BaseScenario):
             await c.accept_cookie()
             await c.humanize()
 
-            c.on_progress and c.on_progress(40, "Запрашиваю код…")
-            log.info(f"[{phone10}] Запрашиваю код…")
-            await c.click_login_btn()
-            await c.humanize()
+            profile_btn = await c.page.query_selector('[data-testid="profile"]')
 
-            c.on_progress and c.on_progress(75, "Заполняю профиль…")
-            log.info(f"[{phone10}] Заполняю профиль…")
-            await self.changing_name_and_gender()
-            await c.human_wait()
+            if profile_btn:
+                log.info(f"[{phone10}] Профиль уже есть → сразу заполняю")
+                c.on_progress and c.on_progress(75, "Заполняю профиль…")
+                await self.changing_name_and_gender()
+            else:
+                log.info(f"[{phone10}] Профиля нет → запускаю логин")
+                c.on_progress and c.on_progress(40, "Войти и запросить пароль")
+                await c.click_login_btn()
+                await c.humanize()
 
-            c.on_progress and c.on_progress(100, "Готово")
-            log.info(f"[{phone10}] DONE ActivateScenario")
+                c.on_progress and c.on_progress(75, "Заполняю профиль…")
+                await self.changing_name_and_gender()
 
         except Exception as e:
             log.exception(f"[{phone10}] ERROR ActivateScenario: {e}")
@@ -68,8 +70,8 @@ class ActivateScenario(BaseScenario):
 
         try:
             profile_btn = await c.page.wait_for_selector(
-                "span.navbar-pc__icon--profile",
-                timeout=5000,
+                '[data-testid="profile"]',
+                timeout=8000,
                 state="visible"
             )
         except PlaywrightTimeoutError:
@@ -77,13 +79,14 @@ class ActivateScenario(BaseScenario):
             raise Exception("Кнопка 'Кабинета' не найдена")
 
         await profile_btn.hover()
-        await c.human_wait()
         await c.human_click(profile_btn)
+
+
 
         try:
             user_profile_btn = await c.page.wait_for_selector(
-                '[data-testid="displayName"]',
-                timeout=5000,
+                '[data-testid="notification-bell"]',
+                timeout=8000,
                 state="visible"
             )
         except PlaywrightTimeoutError:
@@ -92,11 +95,43 @@ class ActivateScenario(BaseScenario):
 
         await c.human_wait()
         await c.human_click(user_profile_btn)
+        await c.human_wait()
+
+        try:
+            close_btn = await c.page.wait_for_selector(
+                '[data-testid="notifications-close"]',
+                timeout=10000,
+                state="visible"
+            )
+            await c.human_click(close_btn)
+
+        except PlaywrightTimeoutError:
+            log.info(f"[{phone10}] Кнопка закрытия уведомления не появилась")
+            pass
+
+        await c.human_wait()
+        await c.human_click(user_profile_btn)
+        await c.human_wait()
+
+        try:
+            profile_btn = await c.page.wait_for_selector(
+                '[data-testid="displayName"]',
+                timeout=6000,
+                state="visible"
+            )
+            await c.human_click(profile_btn)
+            await c.human_wait()
+            await c.humanize()
+
+        except PlaywrightTimeoutError:
+            log.info(f"[{phone10}] Кнопка профиля для ввода имени не появилась")
+            raise Exception("Кнопка профиля для ввода имени не появилась")
+
 
         try:
             first_name_input = await c.page.wait_for_selector(
                 "input[data-testid='firstNameInput']",
-                timeout=5000,
+                timeout=10000,
                 state="visible"
             )
         except PlaywrightTimeoutError:

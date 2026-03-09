@@ -12,7 +12,7 @@ from typing import Callable, Type
 from qasync import asyncSlot
 from PySide6.QtGui import QAction
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMenu, QCheckBox
+from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMenu, QCheckBox, QTabWidget
 
 from config import PROFILE_DIR
 
@@ -47,7 +47,7 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(AppStyle.icon("app"))
         self.user = user
 
-        # ✅ Права пользователя (deny-list в JSONB)
+        #  Права пользователя (deny-list в JSONB)
         self.perms = calc_user_permissions(
             self.user.role,
             self.user.permissions
@@ -74,10 +74,14 @@ class MainWindow(QMainWindow):
         self._reload_timer.timeout.connect(self.load_accounts)
 
         # ---------------- UI ----------------
-        central = QWidget()
-        self.setCentralWidget(central)
+        tabs = QTabWidget(self)
+        self.setCentralWidget(tabs)
 
-        main_layout = QVBoxLayout(central)
+        # ============ TAB 1 (твой текущий интерфейс) ============
+        tab_accounts = QWidget()
+        tabs.addTab(tab_accounts, "Аккаунты")  # название вкладки
+
+        main_layout = QVBoxLayout(tab_accounts)
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(8)
 
@@ -101,14 +105,20 @@ class MainWindow(QMainWindow):
         self.btn_qr.clicked.connect(self.open_qr_dialog)
         self.btn_delete_selected.clicked.connect(self.delete_selected_accounts)
 
+        # # ============ TAB 2 (второе пространство) ============
+        tab_second = QWidget()
+        tabs.addTab(tab_second, "Нагул")
+
+        second_layout = QVBoxLayout(tab_second)
+        second_layout.setContentsMargins(10, 10, 10, 10)
+        second_layout.setSpacing(8)
+
         for b in (self.btn_add, self.btn_activate):
             b.setMinimumHeight(35)
 
         # ✅ Запрет "Удалить выбранные" (скрываем кнопку)
         # if Perm.DELETE_SELECTED not in self.perms:
         #     self.btn_delete_selected.hide()
-
-
 
         top_row.addWidget(self.filter)
         top_row.addStretch()
@@ -199,7 +209,11 @@ class MainWindow(QMainWindow):
     async def load_accounts(self) -> None:
         """Загружает список аккаунтов из БД и обновляет таблицу."""
         async with app_core.db.get_session() as session:
-            rows = await AccountRepo.get_list_accounts(session)
+            rows = await AccountRepo.get_list_accounts(
+                session,
+                user_login=self.user.login,
+                is_admin=(self.user.role == "admin")
+            )
 
         running_ui_text: dict[str, str] = {}
         for phone10, task in self.browser_tasks.items():
@@ -472,7 +486,10 @@ class MainWindow(QMainWindow):
 
         ua = account.get("user_agent", "")
 
-        proxy, msg = await self.proxy_pool.acquire()
+        proxy, msg = await self.proxy_pool.acquire(
+            user_login=self.user.login,
+            is_admin=(self.user.role == "admin"),
+        )
         if not proxy:
             if not self.closing:
                 self._show_warning("Прокси", msg)
@@ -559,14 +576,19 @@ class MainWindow(QMainWindow):
             pass
 
     async def delete_account_cache_async(self, phone10: str) -> None:
-        """Полностью удаляет локальный профиль аккаунта."""
         phone10 = str(phone10).strip()
-        user_login = self.user.login
         profile_path = PROFILE_DIR / phone10
 
         async with app_core.db.get_session() as session:
-            await UsersAccountsRepo.delete_link(session, phone10, user_login)
             await AccountRepo.set_status(session, phone10, AccountStatus.LOGOUT)
+
+        def _rm_folder():
+            if profile_path.exists():
+                shutil.rmtree(profile_path, onerror=self._rm_readonly)
+
+        await asyncio.to_thread(_rm_folder)
+
+        await self.load_accounts()
 
         def _rm_folder():
             """Callback для shutil.rmtree, снимающий флаг read-only с файлов перед удалением."""
@@ -671,6 +693,8 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, lambda: self._set_row_loading(phone10, True, "Запуск…"))
 
             proxy, msg = await self.proxy_pool.acquire_mass(
+                user_login=self.user.login,
+                is_admin=(self.user.role == "admin"),
                 rotate_total_wait_sec=130,
                 rotate_interval_sec=20,
                 rotate_wait_after_ok_sec=10,

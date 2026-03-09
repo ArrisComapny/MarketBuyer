@@ -17,7 +17,10 @@ hiddenimports = []
 # ✅ templates (иконки лежат внутри templates/icons)
 templates_dir = PROJECT_DIR / "templates"
 if templates_dir.exists():
-    datas.append((str(templates_dir), "templates"))
+    for path in templates_dir.rglob("*"):
+        if path.is_file() and path.name != "config.json":
+            rel_parent = path.parent.relative_to(PROJECT_DIR)
+            datas.append((str(path), str(rel_parent)))
 # ---------------------------
 # 2) Collect packages (Qt, etc)
 # ---------------------------
