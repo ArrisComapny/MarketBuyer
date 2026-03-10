@@ -3,7 +3,7 @@ import asyncio
 
 import core.app as app_core
 
-from PySide6.QtCore import QSize
+from PySide6.QtCore import QSize, QTimer
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QFormLayout
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QPushButton, QWidget, QHeaderView
 from PySide6.QtWidgets import QAbstractItemView, QLineEdit, QComboBox, QMessageBox, QSizePolicy
@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QAbstractItemView, QLineEdit, QComboBox, QMessageB
 from gui.style import AppStyle
 from database.models import Proxy
 from utils.proxy import proxy_title
-from database.repositories import ProxyRepo
+from database.repositories import ProxyRepo, UserRepo
 from core.permissions import Perm
 
 
@@ -23,6 +23,9 @@ class ProxyEditDialog(QDialog):
         self.proxy = proxy
         self.setWindowTitle("Добавить прокси" if proxy is None else "Редактировать прокси")
         self.setMinimumWidth(420)
+
+        self.user = getattr(parent, "user", None)
+        self.is_admin = bool(self.user and getattr(self.user, "role", "") == "admin")
 
         layout = QFormLayout(self)
 
@@ -45,6 +48,16 @@ class ProxyEditDialog(QDialog):
         layout.addRow("Scheme", self.scheme_combo)
         layout.addRow("Change IP URL", self.change_ip_edit)
 
+        self.manager_combo: QComboBox | None = None
+        if self.is_admin:
+            self.manager_combo = QComboBox()
+            self.manager_combo.setMinimumHeight(30)
+            self.manager_combo.addItem("Выберите менеджера", None)
+            layout.addRow("Менеджер", self.manager_combo)
+
+            # Запускаем загрузку после того, как Qt закончит текущую инициализацию окна
+            QTimer.singleShot(0, self._start_load_managers)
+
         btn_save = QPushButton("Сохранить")
         btn_cancel = QPushButton("Отмена")
 
@@ -65,6 +78,49 @@ class ProxyEditDialog(QDialog):
 
         self.adjustSize()
 
+    def _start_load_managers(self) -> None:
+        """Безопасный запуск async-загрузки менеджеров."""
+        try:
+            asyncio.create_task(self._load_managers())
+        except Exception as e:
+            QMessageBox.warning(self, "Ошибка", f"Не удалось запустить загрузку менеджеров:\n{e}")
+
+    async def _load_managers(self) -> None:
+        try:
+            async with app_core.db.get_session() as session:
+                users = await UserRepo.get_all_managers(session)
+
+            if self.manager_combo is None:
+                return
+
+            current_owner = self.proxy.owner_login if self.proxy else None
+
+            self.manager_combo.clear()
+            self.manager_combo.addItem("Выберите менеджера", None)
+
+            selected_index = 0
+            for idx, user in enumerate(users, start=1):
+                self.manager_combo.addItem(f"{user.login} ({user.name})", user.login)
+                if current_owner and current_owner == user.login:
+                    selected_index = idx
+
+            self.manager_combo.setCurrentIndex(selected_index)
+
+        except Exception as e:
+            QMessageBox.warning(self, "Ошибка", f"Не удалось загрузить менеджеров:\n{e}")
+
+    def selected_owner_login(self) -> str | None:
+        current_user_login = getattr(self.user, "login", None)
+
+        if self.is_admin:
+            if self.manager_combo is None:
+                return current_user_login
+
+            selected = self.manager_combo.currentData()
+            return selected if selected else current_user_login
+
+        return current_user_login
+
     def on_save_clicked(self) -> None:
         """Валидирует введённые данные прокси и закрывает диалог с Accept при успешной проверке."""
         host = self.host_edit.text().strip()
@@ -78,14 +134,11 @@ class ProxyEditDialog(QDialog):
             self.host_edit.setFocus()
             return
 
-        # 🔹 ПРОВЕРКА IP ПО REGEX (IPv4)
-        # 🔹 IPv4
         ip_regex = (
             r"^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
             r"(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$"
         )
 
-        # 🔹 Домен (proxy.goodmanproxy.com)
         domain_regex = (
             r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)"
             r"(\.[A-Za-z]{2,})+$"
@@ -107,8 +160,9 @@ class ProxyEditDialog(QDialog):
             QMessageBox.warning(self, "Ошибка", "Port обязателен.")
             self.port_edit.setFocus()
             return
-        elif not port.isdigit() or not (1 <= int(port) <= 65535):
-            QMessageBox.warning(self, "Ошибка", "Port должен быть в диапазоне от 0 до 65535.")
+
+        if not port.isdigit() or not (1 <= int(port) <= 65535):
+            QMessageBox.warning(self, "Ошибка", "Port должен быть в диапазоне от 1 до 65535.")
             self.port_edit.setFocus()
             return
 
@@ -122,7 +176,6 @@ class ProxyEditDialog(QDialog):
             self.password_edit.setFocus()
             return
 
-        # Пароль без русских букв
         if re.search(r"[А-Яа-яЁё]", password):
             QMessageBox.warning(self, "Ошибка", "Пароль не должен содержать русские буквы.")
             self.password_edit.setFocus()
@@ -132,25 +185,29 @@ class ProxyEditDialog(QDialog):
             QMessageBox.warning(self, "Ошибка", "Change IP URL обязателен.")
             self.change_ip_edit.setFocus()
             return
-        elif not change_url.startswith("http"):
+
+        if not change_url.startswith("http"):
             QMessageBox.warning(self, "Ошибка", "Change IP URL должен начинаться с http")
             self.change_ip_edit.setFocus()
+            return
+
+        if not self.selected_owner_login():
+            QMessageBox.warning(self, "Ошибка", "Не удалось определить владельца прокси.")
             return
 
         self.accept()
 
 
 class ProxyManagerDialog(QDialog):
-    # ✅ ИЗМЕНЕНО: добавили proxy_pool=None
     def __init__(self, parent=None, proxy_pool=None) -> None:
         """Окно управления списком прокси."""
         super().__init__(parent)
+
         self.user = getattr(parent, "user", None)
         if self.user is None:
             raise RuntimeError("ProxyManagerDialog: parent.user не найден")
-        self.perms = getattr(parent, "perms", set())
 
-        # ✅ ИЗМЕНЕНО: сохранили proxy_pool (может быть None)
+        self.perms = getattr(parent, "perms", set())
         self.proxy_pool = proxy_pool
 
         self.setWindowTitle("Proxy Manager")
@@ -158,14 +215,26 @@ class ProxyManagerDialog(QDialog):
 
         main_layout = QVBoxLayout(self)
 
-        self.table = QTableWidget(0, 2, self)
-        self.table.setHorizontalHeaderLabels(["Прокси", "Действия"])
+        if self.user.role == "admin":
+            self.table = QTableWidget(0, 3, self)
+            self.table.setHorizontalHeaderLabels(["Прокси", "Менеджер", "Действия"])
+        else:
+            self.table = QTableWidget(0, 2, self)
+            self.table.setHorizontalHeaderLabels(["Прокси", "Действия"])
+
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(1, 120)
+
+        if self.user.role == "admin":
+            self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+            self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+            self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+            self.table.setColumnWidth(2, 120)
+        else:
+            self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+            self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+            self.table.setColumnWidth(1, 120)
 
         main_layout.addWidget(self.table)
 
@@ -180,6 +249,22 @@ class ProxyManagerDialog(QDialog):
 
         asyncio.create_task(self.load_proxies())
 
+    async def _open_dialog_async(self, dlg: QDialog) -> int:
+        """
+        Асинхронное ожидание закрытия диалога без dlg.exec(),
+        чтобы не ломать qasync.
+        """
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+
+        def _on_finished(result: int) -> None:
+            if not future.done():
+                future.set_result(result)
+
+        dlg.finished.connect(_on_finished)
+        dlg.open()
+        return await future
+
     async def load_proxies(self) -> None:
         """Загружает список прокси из базы данных и обновляет таблицу."""
         try:
@@ -189,6 +274,15 @@ class ProxyManagerDialog(QDialog):
                     user_login=self.user.login,
                     is_admin=(self.user.role == "admin"),
                 )
+
+                manager_map = {}
+                if self.user.role == "admin":
+                    managers = await UserRepo.get_all_managers(session)
+                    manager_map = {
+                        user.login: f"{user.login} ({user.name})" if getattr(user, "name", None) else user.login
+                        for user in managers
+                    }
+
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить прокси:\n{e}")
             return
@@ -200,11 +294,13 @@ class ProxyManagerDialog(QDialog):
 
             self.table.setItem(row, 0, QTableWidgetItem(proxy_title(proxy)))
 
+            if self.user.role == "admin":
+                manager_text = manager_map.get(proxy.owner_login, proxy.owner_login or "-")
+                self.table.setItem(row, 1, QTableWidgetItem(manager_text))
+
             btn_toggle = QPushButton("ON" if getattr(proxy, "active", True) else "OFF")
             btn_toggle.setFixedSize(45, 25)
-            btn_toggle.setStyleSheet(
-                AppStyle.qss_toggle(getattr(proxy, "active", True))
-            )
+            btn_toggle.setStyleSheet(AppStyle.qss_toggle(getattr(proxy, "active", True)))
 
             btn_edit = QPushButton()
             btn_edit.setIcon(AppStyle.icon("setting"))
@@ -217,8 +313,6 @@ class ProxyManagerDialog(QDialog):
             btn_delete.setIconSize(QSize(20, 20))
             btn_delete.setFixedSize(35, 25)
             btn_delete.setStyleSheet(AppStyle.qss_icon_btn())
-
-
 
             btn_edit.clicked.connect(lambda _, pid=proxy.id: self.open_edit_dialog(pid))
             btn_delete.clicked.connect(lambda _, pid=proxy.id: self.ask_delete(pid))
@@ -236,7 +330,8 @@ class ProxyManagerDialog(QDialog):
             h.addWidget(btn_edit)
             h.addWidget(btn_delete)
 
-            self.table.setCellWidget(row, 1, box)
+            action_col = 2 if self.user.role == "admin" else 1
+            self.table.setCellWidget(row, action_col, box)
 
     async def set_proxy_active_async(self, proxy_id: int, active: bool) -> None:
         try:
@@ -244,16 +339,13 @@ class ProxyManagerDialog(QDialog):
                 await ProxyRepo.set_active(session, proxy_id, active)
                 await session.commit()
 
-            # ✅ ИЗМЕНЕНО: сброс кэша ProxyPool, чтобы работали только активные сразу
             if self.proxy_pool is not None:
                 self.proxy_pool.invalidate_cache()
 
-            # ✅ ИЗМЕНЕНО: убрали двойной load_proxies (оставили один)
             await self.load_proxies()
 
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось изменить статус прокси:\n{e}")
-            return
 
     def open_edit_dialog(self, proxy_id: int) -> None:
         """Открывает диалог редактирования прокси по его ID."""
@@ -273,50 +365,45 @@ class ProxyManagerDialog(QDialog):
         Асинхронно загружает прокси из базы, отображает диалог редактирования
         и сохраняет изменения при подтверждении.
         """
-        async with app_core.db.get_session() as session:
-            proxy = await ProxyRepo.get_proxy_by_id(session, proxy_id)
+        try:
+            async with app_core.db.get_session() as session:
+                proxy = await ProxyRepo.get_proxy_by_id(session, proxy_id)
 
-        if not proxy:
-            QMessageBox.warning(self, "Не найдено", "Прокси не найден в базе.")
-            self.table.setDisabled(False)
-            return
-
-        dlg = ProxyEditDialog(self, proxy)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            self.table.setDisabled(False)
-            return
-
-        async with app_core.db.get_session() as session:
-            db_proxy = await ProxyRepo.get_proxy_by_id(session, proxy_id)
-            if not db_proxy:
+            if not proxy:
                 QMessageBox.warning(self, "Не найдено", "Прокси не найден в базе.")
-                self.table.setDisabled(False)
                 return
 
-            db_proxy.host = dlg.host_edit.text().strip()
-            db_proxy.port = dlg.port_edit.text().strip()
-            db_proxy.login = dlg.login_edit.text().strip()
-            db_proxy.password = dlg.password_edit.text().strip()
-            db_proxy.proxy_scheme = dlg.scheme_combo.currentText().strip()
-            db_proxy.change_ip_url = dlg.change_ip_edit.text().strip()
+            dlg = ProxyEditDialog(self, proxy)
+            result = await self._open_dialog_async(dlg)
 
-            try:
+            if result != QDialog.DialogCode.Accepted:
+                return
+
+            async with app_core.db.get_session() as session:
+                db_proxy = await ProxyRepo.get_proxy_by_id(session, proxy_id)
+                if not db_proxy:
+                    QMessageBox.warning(self, "Не найдено", "Прокси не найден в базе.")
+                    return
+
+                db_proxy.host = dlg.host_edit.text().strip()
+                db_proxy.port = dlg.port_edit.text().strip()
+                db_proxy.login = dlg.login_edit.text().strip()
+                db_proxy.password = dlg.password_edit.text().strip()
+                db_proxy.proxy_scheme = dlg.scheme_combo.currentText().strip()
+                db_proxy.change_ip_url = dlg.change_ip_edit.text().strip()
+                db_proxy.owner_login = dlg.selected_owner_login()
+
                 await session.commit()
 
-                # ✅ ИЗМЕНЕНО: сброс кэша ProxyPool после редактирования
-                if self.proxy_pool is not None:
-                    self.proxy_pool.invalidate_cache()
+            if self.proxy_pool is not None:
+                self.proxy_pool.invalidate_cache()
 
-                await self.load_proxies()
+            await self.load_proxies()
 
-            except Exception as e:
-                await session.rollback()
-                QMessageBox.critical(self, "Ошибка сохранения", f"Не удалось сохранить:\n{e}")
-                self.table.setDisabled(False)
-                return
-
-        # ✅ ИЗМЕНЕНО: убрали лишний второй await self.load_proxies()
-        self.table.setDisabled(False)
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка сохранения", f"Не удалось сохранить:\n{e}")
+        finally:
+            self.table.setDisabled(False)
 
     def ask_delete(self, proxy_id: int) -> None:
         """Запрашивает подтверждение удаления прокси у пользователя."""
@@ -327,6 +414,7 @@ class ProxyManagerDialog(QDialog):
                 "У вас недостаточно прав."
             )
             return
+
         btn = QMessageBox.question(
             self,
             "Удалить прокси?",
@@ -334,6 +422,7 @@ class ProxyManagerDialog(QDialog):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
+
         if btn == QMessageBox.StandardButton.Yes:
             asyncio.create_task(self.delete_async(proxy_id))
 
@@ -342,13 +431,11 @@ class ProxyManagerDialog(QDialog):
         try:
             async with app_core.db.get_session() as session:
                 ok = await ProxyRepo.delete_proxy_by_id(session, proxy_id)
-                # ✅ ИЗМЕНЕНО: commit обязателен
                 await session.commit()
 
             if not ok:
                 QMessageBox.information(self, "Удаление", "Прокси не найден.")
 
-            # ✅ ИЗМЕНЕНО: сброс кэша ProxyPool после удаления
             if self.proxy_pool is not None:
                 self.proxy_pool.invalidate_cache()
 
@@ -366,14 +453,14 @@ class ProxyManagerDialog(QDialog):
                 "У вас недостаточно прав."
             )
             return
+
         dlg = ProxyEditDialog(self, None)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             asyncio.create_task(self._add_proxy_async(dlg))
 
     async def _add_proxy_async(self, dlg: ProxyEditDialog) -> None:
         """Асинхронно сохраняет новый прокси в базу данных и обновляет список прокси."""
-
-        owner_login = self.user.login
+        owner_login = dlg.selected_owner_login()
 
         host = dlg.host_edit.text().strip()
         port = dlg.port_edit.text().strip()
@@ -394,7 +481,6 @@ class ProxyManagerDialog(QDialog):
                     change_ip_url=change_ip_url,
                     owner_login=owner_login,
                 )
-
                 await session.commit()
 
             if self.proxy_pool is not None:

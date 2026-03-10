@@ -32,8 +32,8 @@ SCENARIOS = {
 }
 
 HEADLESS = {
-    ActivateScenario.mode:False ,
-    LoginScenario.mode: False,
+    ActivateScenario.mode:True ,
+    LoginScenario.mode: True,
     StartProcessScenario.mode: False,
     QRcodeScenario.mode: True,
 }

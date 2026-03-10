@@ -19,6 +19,15 @@ class UserRepo:
         )
         return res.scalar_one_or_none()
 
+    @staticmethod
+    async def get_all_managers(session: AsyncSession):
+        res = await session.execute(
+            select(User)
+            .where(User.status.is_(True), User.role != "admin")
+            .order_by(User.login.asc())
+        )
+        return res.scalars().all()
+
 
 class ProxyRepo:
 
@@ -95,15 +104,14 @@ class AccountRepo:
 
     @staticmethod
     async def get_list_accounts(session, *, user_login: str, is_admin: bool):
-        stmt = select(Account.phone, Account.comment, Account.status).order_by(Account.phone.desc())
+        stmt = (
+            select(Account.phone, UsersAccounts.user, Account.comment, Account.status)
+            .join(UsersAccounts, UsersAccounts.phone == Account.phone)
+            .order_by(Account.phone.desc())
+        )
 
         if not is_admin:
-            stmt = (
-                select(Account.phone, Account.comment, Account.status)
-                .join(UsersAccounts, UsersAccounts.phone == Account.phone)
-                .where(UsersAccounts.user == user_login)
-                .order_by(Account.phone.desc())
-            )
+            stmt = stmt.where(UsersAccounts.user == user_login)
 
         res = await session.execute(stmt)
         return res.all()

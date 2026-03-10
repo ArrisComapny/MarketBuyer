@@ -7,10 +7,10 @@ import core.app as app_core
 from PySide6.QtCore import Qt
 from openpyxl import load_workbook
 from sqlalchemy.exc import IntegrityError
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout
+from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QComboBox
 from PySide6.QtWidgets import QPushButton, QLabel, QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView
 
-from database.repositories import AccountRepo, UsersAccountsRepo
+from database.repositories import AccountRepo, UsersAccountsRepo, UserRepo
 
 from utils.phone import phone_to_10_digits
 from utils.random_tools import pick_name_gender, pick_user_agent
@@ -18,6 +18,7 @@ from utils.random_tools import pick_name_gender, pick_user_agent
 
 class ImportMenuBarDialog(QDialog):
     """Окно импорта Excel."""
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Импорт из Excel")
@@ -25,6 +26,9 @@ class ImportMenuBarDialog(QDialog):
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
 
         self._file_path: str | None = None
+
+        parent_user = getattr(parent, "user", None)
+        self.is_admin = bool(parent_user and getattr(parent_user, "role", "") == "admin")
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 14)
@@ -38,6 +42,20 @@ class ImportMenuBarDialog(QDialog):
         top.addWidget(self.lbl_file, 1)
         top.addWidget(self.btn_pick, 0)
         root.addLayout(top)
+
+        # --- Менеджер (только для админа) ---
+        self.manager_combo = None
+        if self.is_admin:
+            manager_row = QHBoxLayout()
+            self.lbl_manager = QLabel("Менеджер:")
+            self.manager_combo = QComboBox()
+            self.manager_combo.addItem("Выберите менеджера", None)
+
+            manager_row.addWidget(self.lbl_manager, 0)
+            manager_row.addWidget(self.manager_combo, 1)
+            root.addLayout(manager_row)
+
+            asyncio.create_task(self._load_managers())
 
         self.table = QTableWidget(self)
         self.table.setColumnCount(2)
@@ -144,12 +162,25 @@ class ImportMenuBarDialog(QDialog):
     def on_import_clicked(self) -> None:
         if not self._file_path:
             return
+
+        if self.is_admin and self.manager_combo is not None and not self.manager_combo.currentData():
+            self.lbl_info.setText("Выберите менеджера для импорта")
+            self.manager_combo.setFocus()
+            return
+
         asyncio.create_task(self.import_async())
 
     async def import_async(self) -> None:
         self.btn_import.setEnabled(False)
         self.btn_pick.setEnabled(False)
-        login = getattr(getattr(self.parent(), "user", None), "login", None)
+
+        parent_user = getattr(self.parent(), "user", None)
+        login = getattr(parent_user, "login", None)
+
+        if self.is_admin:
+            assigned_login = self.manager_combo.currentData() if self.manager_combo else None
+        else:
+            assigned_login = login
 
         added_ok = 0
         skipped_bad = 0
@@ -187,8 +218,13 @@ class ImportMenuBarDialog(QDialog):
                                 comment=""
                             )
                             await session.flush()
-                            if login:
-                                await UsersAccountsRepo.set_users_accounts(session, phone10=phone10, login=login)
+
+                            if assigned_login:
+                                await UsersAccountsRepo.set_users_accounts(
+                                    session,
+                                    phone10=phone10,
+                                    login=assigned_login
+                                )
 
                         if st_item:
                             st_item.setText("imported")
@@ -215,10 +251,27 @@ class ImportMenuBarDialog(QDialog):
             self.btn_import.setEnabled(True)
 
             self.lbl_info.setText(
-                f"Добавлено: {added_ok}\n "
-                f"Битых: {skipped_bad}\n "
-                f"Дублей в файле: {skipped_dupfile}\n "
-                f"Уже есть: {skipped_exists}\n "
-                f"ошибок: {failed_other}\n"
+                f"Добавлено: {added_ok}\n"
+                f"Битых: {skipped_bad}\n"
+                f"Дублей в файле: {skipped_dupfile}\n"
+                f"Уже есть: {skipped_exists}\n"
+                f"Ошибок: {failed_other}\n"
                 f"Импорт завершён"
             )
+
+    async def _load_managers(self) -> None:
+        try:
+            async with app_core.db.get_session() as session:
+                users = await UserRepo.get_all_managers(session)
+
+            if self.manager_combo is None:
+                return
+
+            self.manager_combo.clear()
+            self.manager_combo.addItem("Выберите менеджера", None)
+
+            for user in users:
+                self.manager_combo.addItem(f"{user.login} ({user.name})", user.login)
+
+        except Exception as e:
+            self.lbl_info.setText(f"Ошибка загрузки менеджеров: {e}")

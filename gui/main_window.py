@@ -129,6 +129,7 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(top_row)
 
         self.table = AccountsTable(self)
+        self.table.setColumnHidden(2, self.user.role != "admin")
         main_layout.addWidget(self.table, stretch=1)
 
         # ---------------- Signals from table ----------------
@@ -186,7 +187,7 @@ class MainWindow(QMainWindow):
         if row < 0:
             return
 
-        actions = self.table.cellWidget(row, 4)
+        actions = self.table.cellWidget(row, 5)
 
         if not isinstance(actions, AccountRowActions):
             return
@@ -195,7 +196,7 @@ class MainWindow(QMainWindow):
             actions.set_run_loading(True, loading_text or "Запускается…", self.style_run_btn_loading)
             return
 
-        status_item = self.table.item(row, 2)
+        status_item = self.table.item(row, 3)
         st = AccountStatus.from_text(status_item.text())
         actions.set_run_loading(False, self._status_to_run_text(st), self.style_run_btn)
 
@@ -238,30 +239,36 @@ class MainWindow(QMainWindow):
         allowed = self.filter.allowed_statuses()
         status_show_all = (len(allowed) == 0)
 
-        text = self.filter.search_text()
-        digits = self.filter.search_digits()
+        text = self.filter.search_text().strip().lower()
+        digits = "".join(ch for ch in text if ch.isdigit())
 
         for row in range(self.table.rowCount()):
-            st_item = self.table.item(row, 2)
-            st = AccountStatus.from_text(st_item.text())
+            st_item = self.table.item(row, 3)  # статус
+            st = AccountStatus.from_text(st_item.text()) if st_item else None
             status_ok = status_show_all or (st in allowed)
 
             if not text:
                 search_ok = True
             else:
-                phone_item = self.table.item(row, 1)
-                comment_item = self.table.item(row, 3)
+                phone_item = self.table.item(row, 1)  # телефон
+                manager_item = self.table.item(row, 2)  # менеджер
+                comment_item = self.table.item(row, 4)  # комментарий
 
-                phone = phone_item.text().lower()
-                comment = comment_item.text().lower()
+                phone = (phone_item.text() if phone_item else "").strip().lower()
+                manager = (manager_item.text() if manager_item else "").strip().lower()
+                comment = (comment_item.text() if comment_item else "").strip().lower()
 
                 phone_digits = "".join(ch for ch in phone if ch.isdigit())
+
                 match_phone = (text in phone) or (digits and digits in phone_digits)
+                match_manager = text in manager
                 match_comment = text in comment
-                search_ok = match_phone or match_comment
+
+                search_ok = bool(match_phone or match_manager or match_comment)
 
             self.table.setRowHidden(row, not (status_ok and search_ok))
-            self.table._on_row_checkbox_changed()
+
+        self.table._on_row_checkbox_changed()
 
     def on_comment_changed(self, phone10: str, comment: str) -> None:
         """Сохраняет изменённый комментарий аккаунта в БД."""

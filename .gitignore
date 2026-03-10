@@ -2,6 +2,9 @@
 config.py
 /.venv/
 /profiles/
+/logs/
+/dist/
+/build/
 /templates/config.json
 __pycache__/
 *.pyc

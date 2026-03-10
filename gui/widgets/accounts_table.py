@@ -30,10 +30,13 @@ class AccountsTable(QTableWidget):
 
         self._filling = False
 
-        self.setColumnCount(5)
-        self.setHorizontalHeaderLabels(["", "Номер телефона", "Статус", "Комментарий", "Действие"])
+        self.setColumnCount(6)
+        self.setHorizontalHeaderLabels(["", "Номер телефона", "Менеджер", "Статус", "Комментарий", "Действие"])
         self.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.EditKeyPressed)
+        self.setEditTriggers(
+            QAbstractItemView.EditTrigger.DoubleClicked |
+            QAbstractItemView.EditTrigger.EditKeyPressed
+        )
 
         self.header = CheckBoxHeader(Qt.Orientation.Horizontal, self)
         self.setHorizontalHeader(self.header)
@@ -43,19 +46,23 @@ class AccountsTable(QTableWidget):
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
         hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
 
         self.setColumnWidth(0, 36)
         self.setColumnWidth(1, 120)
-        self.setColumnWidth(2, 110)
-        self.setColumnWidth(4, 200)
+        self.setColumnWidth(2, 90)
+        self.setColumnWidth(3, 110)
+        self.setColumnWidth(5, 200)
 
         self.itemChanged.connect(self._on_item_changed)
 
-    def fill(self,
-             rows: Sequence[Row[tuple[str, str | None, str | None]]],
-             running_ui: dict[str, str] | None = None) -> None:
+    def fill(
+        self,
+        rows,
+        running_ui: dict[str, str] | None = None
+    ) -> None:
         """Заполняет таблицу списком аккаунтов."""
         self._filling = True
         self.blockSignals(True)
@@ -63,17 +70,26 @@ class AccountsTable(QTableWidget):
         running_ui = running_ui or {}
 
         self.setRowCount(len(rows))
-        for row, (phone, comment, status) in enumerate(rows):
+        for row, row_data in enumerate(rows):
+            phone, manager, comment, status = row_data
             phone10 = str(phone).strip()
             loading_text = running_ui.get(phone10)
             status = AccountStatus.from_text(status)
 
-            self._fill_row(row, phone10, comment, status, loading_text)
+            self._fill_row(row, phone10, manager or "", comment or "", status, loading_text)
 
         self.blockSignals(False)
         self._filling = False
 
-    def _fill_row(self, row: int, phone10: str, comment: str, status: AccountStatus, loading_text: str) -> None:
+    def _fill_row(
+        self,
+        row: int,
+        phone10: str,
+        manager: str,
+        comment: str,
+        status: AccountStatus,
+        loading_text: str
+    ) -> None:
         """Заполняет одну строку таблицы данными аккаунта."""
         checkbox = QCheckBox()
         box = QWidget()
@@ -92,13 +108,17 @@ class AccountsTable(QTableWidget):
         it_phone.setFlags(it_phone.flags() & ~Qt.ItemFlag.ItemIsEditable)
         self.setItem(row, 1, it_phone)
 
+        it_manager = QTableWidgetItem(manager)
+        it_manager.setFlags(it_manager.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self.setItem(row, 2, it_manager)
+
         it_status = QTableWidgetItem(status.value)
         it_status.setFlags(it_status.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        self.setItem(row, 2, it_status)
+        self.setItem(row, 3, it_status)
 
         self._apply_status_color(it_status, status)
 
-        self.setItem(row, 3, QTableWidgetItem(comment or ""))
+        self.setItem(row, 4, QTableWidgetItem(comment or ""))
 
         run_text = status.run_text()
 
@@ -110,7 +130,7 @@ class AccountsTable(QTableWidget):
         actions.deleteClicked.connect(self.deleteClicked)
         actions.moreClicked.connect(self.moreClicked)
 
-        self.setCellWidget(row, 4, actions)
+        self.setCellWidget(row, 5, actions)
 
         if loading_text:
             actions.set_run_loading(True, loading_text, AppStyle.qss_run_btn_disabled())
@@ -164,6 +184,9 @@ class AccountsTable(QTableWidget):
         if self._filling:
             return
 
+        if item.column() != 4:
+            return
+
         phone_item = self.item(item.row(), 1)
         phone10 = phone_item.data(Qt.ItemDataRole.UserRole)
 
@@ -181,7 +204,7 @@ class AccountsTable(QTableWidget):
             phone_item = self.item(row, 1)
             phone10 = phone_item.data(Qt.ItemDataRole.UserRole)
 
-            status_item = self.item(row, 2)
+            status_item = self.item(row, 3)
             status = status_item.text()
 
             out.append(RowItems(row_idx=row, phone10=phone10, status=status))

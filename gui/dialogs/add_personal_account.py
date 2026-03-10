@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QPushButton
 from PySide6.QtWidgets import QLineEdit, QComboBox, QSizePolicy, QFormLayout
 
-from database.repositories import AccountRepo
+from database.repositories import AccountRepo, UsersAccountsRepo, UserRepo
 
 from utils.phone import phone_to_10_digits
 from utils.messagebox import CustomMessageBox
@@ -24,7 +24,10 @@ class AddAccountDialog(QDialog):
 
         self.account = account
         self.setWindowTitle("Добавить личный кабинет")
-        self.resize(520, 330)
+        self.resize(520, 380)
+
+        parent_user = getattr(parent, "user", None)
+        self.is_admin = bool(parent_user and getattr(parent_user, "role", "") == "admin")
 
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(12, 12, 12, 12)
@@ -60,11 +63,18 @@ class AddAccountDialog(QDialog):
         self.ua_edit.setMinimumHeight(30)
         form.addRow("User-Agent", self.ua_edit)
 
-        # --- Комментарий ---
         self.comment_edit = QLineEdit()
         self.comment_edit.setPlaceholderText("Например: основной аккаунт / заметка")
         self.comment_edit.setMinimumHeight(30)
         form.addRow("Комментарий", self.comment_edit)
+
+        self.manager_combo: QComboBox | None = None
+        if self.is_admin:
+            self.manager_combo = QComboBox()
+            self.manager_combo.setMinimumHeight(30)
+            self.manager_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            self.manager_combo.addItem("Выберите менеджера", None)
+            form.addRow("Менеджер", self.manager_combo)
 
         main_layout.addLayout(form)
         main_layout.addStretch()
@@ -85,11 +95,41 @@ class AddAccountDialog(QDialog):
         main_layout.addWidget(self.btn_save)
         main_layout.addWidget(self.btn_cancel)
 
+        if self.is_admin and self.manager_combo is not None:
+            asyncio.create_task(self._load_managers())
+
+    async def _load_managers(self) -> None:
+        try:
+            async with app_core.db.get_session() as session:
+                users = await UserRepo.get_all_managers(session)
+
+            if self.manager_combo is None:
+                return
+
+            current_manager = (self.account or {}).get("manager_login")
+
+            self.manager_combo.clear()
+            self.manager_combo.addItem("Выберите менеджера", None)
+
+            selected_index = 0
+            for idx, user in enumerate(users, start=1):
+                label = f"{user.login} ({user.name})"
+                self.manager_combo.addItem(label, user.login)
+                if current_manager and current_manager == user.login:
+                    selected_index = idx
+
+            self.manager_combo.setCurrentIndex(selected_index)
+
+        except Exception as e:
+            CustomMessageBox.warning(self, "Ошибка", f"Не удалось загрузить менеджеров:\n{e}")
+
     @staticmethod
-    async def _normalize_fields(session: AsyncSession,
-                                name: str,
-                                gender: str | None,
-                                user_agent: str) -> tuple[str, str, str]:
+    async def _normalize_fields(
+        session: AsyncSession,
+        name: str,
+        gender: str | None,
+        user_agent: str
+    ) -> tuple[str, str, str]:
         """Нормализует поля аккаунта."""
         if not name and not gender:
             name, gender = await pick_name_gender(session)
@@ -112,6 +152,7 @@ class AddAccountDialog(QDialog):
         gender = self.gender_combo.currentData()
         phone_raw = self.phone_edit.text().strip()
         comment = self.comment_edit.text().strip()
+        manager_login = self.manager_combo.currentData() if self.manager_combo else None
 
         if not phone_raw:
             CustomMessageBox.warning(self, "Ошибка", "Телефон обязателен.")
@@ -132,18 +173,34 @@ class AddAccountDialog(QDialog):
             self.phone_edit.setFocus()
             return
 
+        if self.is_admin and not manager_login:
+            CustomMessageBox.warning(self, "Ошибка", "Выберите менеджера.")
+            if self.manager_combo:
+                self.manager_combo.setFocus()
+            return
+
         if self.account:
-            asyncio.create_task(self.update_account(name=name,
-                                                    gender=gender,
-                                                    phone10=phone10,
-                                                    user_agent=user_agent,
-                                                    comment=comment))
+            asyncio.create_task(
+                self.update_account(
+                    name=name,
+                    gender=gender,
+                    phone10=phone10,
+                    user_agent=user_agent,
+                    comment=comment,
+                    manager_login=manager_login,
+                )
+            )
         else:
-            asyncio.create_task(self.save_account(name=name,
-                                                  gender=gender,
-                                                  phone10=phone10,
-                                                  user_agent=user_agent,
-                                                  comment=comment))
+            asyncio.create_task(
+                self.save_account(
+                    name=name,
+                    gender=gender,
+                    phone10=phone10,
+                    user_agent=user_agent,
+                    comment=comment,
+                    manager_login=manager_login,
+                )
+            )
 
     def fill_from_account(self) -> None:
         """Заполняет поля формы данными существующего аккаунта при открытии диалога в режиме редактирования."""
@@ -159,7 +216,15 @@ class AddAccountDialog(QDialog):
 
         self.gender_combo.setCurrentIndex(index)
 
-    async def save_account(self, name: str, gender: str | None, phone10: str, user_agent: str, comment: str) -> None:
+    async def save_account(
+        self,
+        name: str,
+        gender: str | None,
+        phone10: str,
+        user_agent: str,
+        comment: str,
+        manager_login: str | None,
+    ) -> None:
         """Асинхронно создаёт новый аккаунт в базе данных."""
         self.btn_save.setEnabled(False)
 
@@ -181,6 +246,19 @@ class AddAccountDialog(QDialog):
                     comment=comment,
                 )
 
+                owner_login = manager_login
+                if not owner_login:
+                    parent_user = getattr(self.parent(), "user", None)
+                    if parent_user is not None:
+                        owner_login = parent_user.login
+
+                if owner_login:
+                    await UsersAccountsRepo.set_users_accounts(
+                        session,
+                        phone10=phone10,
+                        login=owner_login
+                    )
+
             self.account_saved.emit()
             self.accept()
 
@@ -193,7 +271,15 @@ class AddAccountDialog(QDialog):
         finally:
             self.btn_save.setEnabled(True)
 
-    async def update_account(self, name: str, gender: str | None, phone10: str, user_agent: str, comment: str) -> None:
+    async def update_account(
+        self,
+        name: str,
+        gender: str | None,
+        phone10: str,
+        user_agent: str,
+        comment: str,
+        manager_login: str | None,
+    ) -> None:
         """Асинхронно обновляет существующий аккаунт в базе данных."""
         self.btn_save.setEnabled(False)
 
@@ -219,6 +305,19 @@ class AddAccountDialog(QDialog):
                     user_agent=user_agent,
                     comment=comment,
                 )
+
+                owner_login = manager_login
+                if not owner_login:
+                    parent_user = getattr(self.parent(), "user", None)
+                    if parent_user is not None:
+                        owner_login = parent_user.login
+
+                if owner_login:
+                    await UsersAccountsRepo.set_users_accounts(
+                        session,
+                        phone10=phone10,
+                        login=owner_login
+                    )
 
             self.account_saved.emit()
             self.accept()
