@@ -5,7 +5,7 @@ import asyncio
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QWidget,
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QPushButton
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QPushButton, QMessageBox
 )
 
 from gui.style import AppStyle
@@ -265,13 +265,25 @@ class AllActivationDialog(QDialog):
             return
 
         max_parallel = 10
-        capacity = await self.mw.proxy_pool.capacity()
+        capacity = await self.mw.proxy_pool.capacity(
+            user_login=self.mw.user.login,
+            is_admin=(self.mw.user.role == "admin"),
+        )
         workers_n = min(max_parallel, capacity)
         log.info(f"[MASS] capacity={capacity} -> workers_n={workers_n}")
 
         if workers_n <= 0:
             log.warning("[MASS] no available proxies (workers_n<=0)")
-            QTimer.singleShot(0, lambda: self.setWindowTitle("Нет доступных прокси"))
+
+            def show_msg():
+                QMessageBox.warning(
+                    self,
+                    "Нет доступных прокси",
+                    "Все прокси заняты или недоступны."
+                )
+
+            QTimer.singleShot(0, show_msg)
+
             self._running = False
             self.btn_start.setText("Запустить")
             return

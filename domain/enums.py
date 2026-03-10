@@ -5,12 +5,14 @@ class ScenarioMode(str, Enum):
     LOGIN = "login_account"
     START = "start_account"
     QRCODE = "qrcode_account"
+    FEEDING = "feeding_account"
 
 
 class AccountStatus(str, Enum):
     DISABLE = "disable"
     LOGIN = "login"
     LOGOUT = "logout"
+
 
     def run_text(self) -> str:
         return {

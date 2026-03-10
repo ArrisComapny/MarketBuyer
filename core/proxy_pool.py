@@ -1,7 +1,7 @@
 import asyncio
 import aiohttp
 import random
-from sqlalchemy import select
+from sqlalchemy import select, or_
 
 from database.db import Database
 from database.models import Proxy
@@ -13,33 +13,62 @@ class ProxyPool:
         self._busy: set[int] = set()
 
         # ✅ Кэш активных прокси
-        self._proxies_cache: list[Proxy] | None = None
+        self._proxies_cache: dict[tuple[str, bool], list[Proxy]] = {}
 
     # =========================
     # КЭШ
     # =========================
 
-    def invalidate_cache(self) -> None:
-        """Сбросить кэш активных прокси (вызывать после изменений в БД)."""
-        self._proxies_cache = None
+    def invalidate_cache(self, user_login: str | None = None) -> None:
+        """
+        Сбросить кэш.
+        user_login=None -> сбросить весь кэш
+        user_login='vasya' -> сбросить кэш только этого пользователя (и admin/не-admin ключи)
+        """
+        if user_login is None:
+            self._proxies_cache.clear()
+            return
 
-    async def _load_proxies(self) -> list[Proxy]:
+        for key in list(self._proxies_cache.keys()):
+            if key[0] == user_login:
+                self._proxies_cache.pop(key, None)
+
+    async def _load_proxies(self, *, user_login: str, is_admin: bool) -> list[Proxy]:
         """
-        Загружает ТОЛЬКО активные прокси.
-        Использует кэш, чтобы не дёргать БД постоянно.
+        Загружает только активные прокси.
+
+        Для manager:
+            только owner_login == user_login
+
+        Для admin:
+            только owner_login IS NULL
+            или owner_login == user_login
+
+        Кэшируется по (user_login, is_admin)
         """
-        if self._proxies_cache is not None:
-            return self._proxies_cache
+        key = (user_login, is_admin)
+        if key in self._proxies_cache:
+            return self._proxies_cache[key]
 
         async with Database().get_session() as session:
-            res = await session.execute(
-                select(Proxy)
-                .where(Proxy.active.is_(True))
-                .order_by(Proxy.id.asc())
-            )
+            stmt = select(Proxy).where(Proxy.active.is_(True))
+
+            if is_admin:
+                stmt = stmt.where(
+                    or_(
+                        Proxy.owner_login.is_(None),
+                        Proxy.owner_login == user_login,
+                    )
+                )
+            else:
+                stmt = stmt.where(Proxy.owner_login == user_login)
+
+            stmt = stmt.order_by(Proxy.id.asc())
+
+            res = await session.execute(stmt)
             proxies = res.scalars().all()
 
-        self._proxies_cache = proxies
+        self._proxies_cache[key] = proxies
         return proxies
 
     # =========================
@@ -78,13 +107,16 @@ class ProxyPool:
     # =========================
 
     async def acquire_mass(
-        self,
-        rotate_total_wait_sec: int = 120,
-        rotate_interval_sec: int = 20,
-        rotate_wait_after_ok_sec: int = 5,
-        require_rotate: bool = True,
-        wait_free_total_sec: int = 120,
-        wait_free_interval_sec: int = 20,
+            self,
+            *,
+            user_login: str,
+            is_admin: bool,
+            rotate_total_wait_sec: int = 120,
+            rotate_interval_sec: int = 20,
+            rotate_wait_after_ok_sec: int = 5,
+            require_rotate: bool = True,
+            wait_free_total_sec: int = 120,
+            wait_free_interval_sec: int = 20,
     ) -> tuple[Proxy | None, str]:
 
         last_err = "Неизвестная ошибка"
@@ -93,7 +125,7 @@ class ProxyPool:
         deadline_free = asyncio.get_event_loop().time() + wait_free_total_sec
 
         while True:
-            proxies = await self._load_proxies()
+            proxies = await self._load_proxies(user_login=user_login, is_admin=is_admin)
 
             async with self._lock:
                 free = [p for p in proxies if p.id not in self._busy]
@@ -150,13 +182,15 @@ class ProxyPool:
     # =========================
 
     async def acquire(
-        self,
-        require_rotate: bool = True,
-        rotate_wait_sec: int = 5,
-        rotate_retries: int = 3,
+            self,
+            user_login: str,
+            is_admin: bool,
+            require_rotate: bool = True,
+            rotate_wait_sec: int = 5,
+            rotate_retries: int = 3,
     ) -> tuple[Proxy | None, str]:
 
-        proxies = await self._load_proxies()
+        proxies = await self._load_proxies(user_login=user_login, is_admin=is_admin)
         last_err = "Неизвестная ошибка"
 
         async with self._lock:
@@ -166,30 +200,34 @@ class ProxyPool:
 
             random.shuffle(free)
 
-        for proxy in free:
-            async with self._lock:
-                if proxy.id in self._busy:
-                    continue
-                self._busy.add(proxy.id)
-
-            try:
-                if require_rotate:
-                    for _ in range(rotate_retries):
-                        ok, msg = await self._change_ip(proxy)
-                        if ok:
-                            if rotate_wait_sec > 0:
-                                await asyncio.sleep(rotate_wait_sec)
-                            break
-                        last_err = msg
-                    else:
-                        await self.release(proxy.id)
+        # Делаем несколько кругов по всем свободным прокси
+        for _ in range(rotate_retries):
+            for proxy in free:
+                async with self._lock:
+                    if proxy.id in self._busy:
                         continue
+                    self._busy.add(proxy.id)
 
-                return proxy, f"Proxy {proxy.id} выдан"
+                try:
+                    if not require_rotate:
+                        return proxy, f"Proxy {proxy.id} выдан"
 
-            except Exception as e:
-                last_err = str(e)
-                await self.release(proxy.id)
+                    ok, msg = await self._change_ip(proxy)
+                    if ok:
+                        if rotate_wait_sec > 0:
+                            await asyncio.sleep(rotate_wait_sec)
+                        return proxy, f"Proxy {proxy.id} выдан ({msg})"
+
+                    last_err = msg
+                    await self.release(proxy.id)
+
+                except asyncio.CancelledError:
+                    await self.release(proxy.id)
+                    raise
+
+                except Exception as e:
+                    last_err = str(e)
+                    await self.release(proxy.id)
 
         return None, f"Не удалось выдать прокси. Последняя ошибка: {last_err}"
 
@@ -197,8 +235,7 @@ class ProxyPool:
     # CAPACITY
     # =========================
 
-    async def capacity(self) -> int:
-        """Сколько активных прокси доступно."""
-        proxies = await self._load_proxies()
+    async def capacity(self, *, user_login: str, is_admin: bool) -> int:
+        proxies = await self._load_proxies(user_login=user_login, is_admin=is_admin)
         return len(proxies)
 
