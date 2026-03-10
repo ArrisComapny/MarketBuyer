@@ -1,7 +1,7 @@
 import asyncio
 import aiohttp
 import random
-from sqlalchemy import select
+from sqlalchemy import select, or_
 
 from database.db import Database
 from database.models import Proxy
@@ -35,9 +35,15 @@ class ProxyPool:
 
     async def _load_proxies(self, *, user_login: str, is_admin: bool) -> list[Proxy]:
         """
-        Загружает ТОЛЬКО активные прокси.
-        Для user -> только owner_login == user_login
-        Для admin -> все активные
+        Загружает только активные прокси.
+
+        Для manager:
+            только owner_login == user_login
+
+        Для admin:
+            только owner_login IS NULL
+            или owner_login == user_login
+
         Кэшируется по (user_login, is_admin)
         """
         key = (user_login, is_admin)
@@ -45,12 +51,16 @@ class ProxyPool:
             return self._proxies_cache[key]
 
         async with Database().get_session() as session:
-            stmt = (
-                select(Proxy)
-                .where(Proxy.active.is_(True))
-            )
+            stmt = select(Proxy).where(Proxy.active.is_(True))
 
-            if not is_admin:
+            if is_admin:
+                stmt = stmt.where(
+                    or_(
+                        Proxy.owner_login.is_(None),
+                        Proxy.owner_login == user_login,
+                    )
+                )
+            else:
                 stmt = stmt.where(Proxy.owner_login == user_login)
 
             stmt = stmt.order_by(Proxy.id.asc())

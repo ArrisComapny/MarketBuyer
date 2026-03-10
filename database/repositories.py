@@ -6,7 +6,7 @@ import datetime
 from typing import Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, delete, insert, desc, distinct
+from sqlalchemy import select, update, delete, insert, desc, distinct, or_
 
 from database.models import Account, UsersAccounts, PhoneCode, User, Proxy
 
@@ -30,6 +30,23 @@ class UserRepo:
 
 
 class ProxyRepo:
+
+    @staticmethod
+    async def get_runtime_proxies(session, user_login: str, is_admin: bool):
+        stmt = select(Proxy).where(Proxy.active.is_(True))
+
+        if is_admin:
+            stmt = stmt.where(
+                or_(
+                    Proxy.owner_login.is_(None),
+                    Proxy.owner_login == user_login,
+                )
+            )
+        else:
+            stmt = stmt.where(Proxy.owner_login == user_login)
+
+        result = await session.execute(stmt)
+        return result.scalars().all()
 
     @staticmethod
     async def get_proxies(session: AsyncSession, *, user_login: str, is_admin: bool) -> Sequence[Proxy]:
